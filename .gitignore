@@ -1,0 +1,26 @@
+# Local build trees and generated CMake files
+/build/
+/build-*/
+/CMakeFiles/
+/CMakeCache.txt
+/Makefile
+/cmake_install.cmake
+/CTestTestfile.cmake
+
+# Locally installed toolchains and virtual environments
+/.qt-*/
+/.cross-tools/
+/.qt-venv/
+
+# Release staging and generated packages (uploaded to GitHub Releases)
+/dist-*/
+/release-stage-*/
+/final-unpack-check-*/
+
+# Local verification fixtures, screenshots, and logs
+/artifacts/
+/*.log
+/aqtinstall.log
+
+# Operating-system metadata
+.DS_Store
