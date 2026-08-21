@@ -1,5 +1,9 @@
 # bgi-dl
 
+⚠️ IMPORTANT! DO NOT PROMOTE OR SHARE THIS REPOSITORY ON ANY FORUMS, YOUTUBE, OR OTHER PUBLIC PLATFORMS!
+⚠️ 주의! 이 저장소를 어떤 포럼, 유튜브 또는 기타 공개적인 장소에서도 홍보하거나 공유하지 마세요!
+⚠️ 注意！不要在任何论坛，哔哩哔哩等公开场合宣传，分享此仓库！
+
 Mnet Plus Downloader 是一个 Qt 6 桌面下载器。输入 Mnet Plus 视频页后，程序会读取站内标题、公开的 HLS 视频流、独立音频流与字幕配置，再通过 FFmpeg 重封装为同名 MKV。
 
 界面右上角可即时切换简体中文、English、日本語和한국어。首次启动会跟随系统界面语言（支持范围内），之后会记住选择。
