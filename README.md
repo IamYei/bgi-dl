@@ -1,36 +1,42 @@
-# Mnet Plus Downloader
+# bgi-dl
 
-一个 Qt 6 桌面下载器。输入 Mnet Plus 视频页后，程序会读取站内标题、公开的 HLS 视频流、独立音频流与字幕配置，再通过 FFmpeg 重封装为同名 MKV。
+Mnet Plus Downloader is a Qt 6 desktop downloader for Mnet Plus. Paste an Mnet Plus video page URL and the application reads the page title, publicly available HLS video and audio streams, and subtitle configuration, then remuxes the result into an MKV file with FFmpeg.
 
-界面右上角可即时切换简体中文、English、日本語和한국어。首次启动会跟随系统界面语言（支持范围内），之后会记住选择。
+The interface supports four languages: English, Simplified Chinese, Japanese, and Korean. The first launch follows the system language when it is supported; later launches remember the language selected in the application.
 
-字幕支持日本语、英语、韩语、简体中文（`zh_CN`）和繁体中文（`zh_TW`）多选；每种语言既可内封为独立 MKV 字幕轨，也可同时导出为 `视频标题.语言.srt`。
+## Features
 
-媒体和字幕会并行下载，字幕窗口使用有界并发请求。下载器会解析 HLS master，自动从 2160p 开始向下探测最高可用分辨率（2160 → 1440 → 1080 → 720 → …），即使 master 只列出低分辨率，也会从 variant 地址继续查找更高档清单。视频分片使用 6 路并发下载，独立音轨（`_audio.m3u8` 或 `_audio.cmfa`）同时下载，随后只进行本地流复制。输出目录会在本机设置中自动记忆。
+- Select multiple subtitle languages: Japanese, English, Korean, Simplified Chinese (`zh_CN`), and Traditional Chinese (`zh_TW`). Subtitles can be embedded as separate MKV tracks and exported as `video-title.language.srt` files.
+- Download media and subtitles concurrently with bounded subtitle request concurrency.
+- Parse HLS master playlists and probe for the highest available resolution from 2160p down through 1440p, 1080p, 720p, and lower variants. If the master lists only low resolutions, the downloader also follows variant URLs to find higher-quality playlists.
+- Download video segments with six concurrent workers. Download a separate audio playlist (`_audio.m3u8` or `_audio.cmfa`) at the same time, then use local stream copy for remuxing.
+- Remember the output directory in local application settings.
+- Select all subtitles with one action, embed them in MKV, export SRT files, or do both.
+- Paste multiple URLs for sequential batch downloads.
+- Customize the output filename template. The default is `{date}.Mnet Plus.{title}.WEB-DL.{res}.{codec}.-{tag}.{ext}`. Available placeholders are `{date}` (YYMMDD publication date), `{title}`, `{res}` (for example `1080p`), `{resolution}` (for example `1080`), `{codec}` (automatically detected as H264 or HEVC), `{tag}` (release group, default `buguibgib`), and `{ext}`.
 
-字幕支持一键全选，也支持内封 MKV 和单独导出 SRT。批量下载允许一次粘贴多个地址，逐个解析后顺序下载。
+## Requirements
 
-文件名可自定义模板，默认 `{date}.Mnet Plus.{title}.WEB-DL.{res}.{codec}.-{tag}.{ext}`。可用占位符：`{date}`（YYMMDD 发布日期）、`{title}`、`{res}`（如 `1080p`）、`{resolution}`（如 `1080`）、`{codec}`（H264/HEVC 自动识别）、`{tag}`（发布组，默认 `buguibgib`）、`{ext}`。
+- Qt 6.5 or newer with Widgets, Network, Concurrent, and Sql components
+- CMake 3.21 or newer
+- `ffmpeg` and `ffprobe`
 
-## 环境
+### Windows
 
-- Qt 6.5 或更新版本（Widgets、Network、Concurrent、Sql、Test）
-- CMake 3.21 或更新版本
-- `ffmpeg`
+- Visual Studio 2022 with **Desktop development with C++**, or another Qt 6.5+ C++17 toolchain
+- Qt 6.5+ with Widgets, Network, Concurrent, and Sql components
+- CMake 3.21+
+- Put `ffmpeg.exe` and `ffprobe.exe` on `PATH`, or place them beside `MnetPlusDownloader.exe`
 
-Windows：
-
-- Visual Studio 2022（Desktop development with C++）或其他支持 C++17 的 Qt 6.5+ 工具链
-- Qt 6.5+（Widgets、Network、Concurrent、Sql、Test）
-- CMake 3.21+ 与 `ffmpeg`；把 `ffmpeg.exe` / `ffprobe.exe` 放入 `PATH`，或与下载器 `.exe` 放在同一目录
-
-macOS/Homebrew：
+### macOS (Homebrew)
 
 ```bash
 brew install qt cmake ffmpeg
 ```
 
-## 构建
+## Build
+
+### macOS and Linux
 
 ```bash
 cmake -S . -B build
@@ -39,9 +45,13 @@ ctest --test-dir build --output-on-failure
 open build/MnetPlusDownloader.app
 ```
 
-也可以直接运行 `build/MnetPlusDownloader.app/Contents/MacOS/MnetPlusDownloader`。
+You can also run `build/MnetPlusDownloader.app/Contents/MacOS/MnetPlusDownloader` directly on macOS.
 
-Windows（PowerShell，Qt 安装目录按实际版本调整）：
+The source-only repository keeps the release build small. The optional QtTest sources used by the maintainer are kept locally and are enabled automatically when present; a fresh checkout builds the application without them.
+
+### Windows (PowerShell)
+
+Adjust the Qt installation path to match your machine:
 
 ```powershell
 cmake -S . -B build -DCMAKE_PREFIX_PATH="C:\Qt\6.8.0\msvc2022_64"
@@ -49,30 +59,43 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-使用 Visual Studio 生成器时，程序通常位于 `build\Release\MnetPlusDownloader.exe`。发布前请使用同一 Qt 安装目录中的 `windeployqt` 收集 Qt DLL 和平台插件：
+With a Visual Studio generator, the executable is usually `build\Release\MnetPlusDownloader.exe`. Before distributing it, use `windeployqt` from the same Qt installation to collect Qt DLLs and platform plugins:
 
 ```powershell
 & "C:\Qt\6.8.0\msvc2022_64\bin\windeployqt.exe" "build\Release\MnetPlusDownloader.exe"
 ```
 
-## 浏览器会话与隐私
+## Browser Sessions and Privacy
 
-程序自身读取 Chrome 或 Edge 浏览器会话，只保留域名为 `mnetplus.world` 或其子域的 Cookie。Cookie 数据库只复制到系统临时目录进行只读查询：macOS 使用 Keychain 与 AES，Windows 使用 DPAPI 与 Windows CNG AES-GCM 解密 Chromium Cookie。Cookie 值不会写入任务日志，也不会发送给 Mnet Plus 以外的站点。
+The application reads Chrome or Edge browser sessions and keeps only cookies for `mnetplus.world` and its subdomains. The cookie database is copied to a temporary system directory for read-only access. Chromium Cookie decryption uses Keychain and AES on macOS, and DPAPI plus Windows CNG AES-GCM on Windows. Cookie values are never written to task logs or sent to sites other than Mnet Plus.
 
-Cookie 存储路径、PBKDF2/AES-CBC 参数和 Chrome 24+ 域名摘要均与 `yt-dlp` 的 Chromium Cookie 实现保持兼容，但程序不调用或依赖 `yt-dlp`。
+Cookie storage paths, PBKDF2/AES-CBC parameters, and Chrome 24+ host-key hashing follow the Chromium cookie implementation used by `yt-dlp`; the application does not call or depend on `yt-dlp`.
 
-macOS 首次读取浏览器时，系统可能询问钥匙串权限；拒绝授权时程序会回退到游客模式。
+On the first browser-session read, macOS may ask for Keychain access. If access is declined, the application falls back to guest mode.
 
-完整 CDN 流依赖 CloudFront 签名 Cookie。程序使用 FFmpeg 的 domain/path 受限 Cookie 选项，不使用会随重定向跨域发送的裸 `Cookie` 请求头。受 FFmpeg CLI 接口限制，下载期间 Cookie 值会短暂存在于 FFmpeg 进程参数中，因此同一系统用户的进程检查工具可能看到它；退出 FFmpeg 后即消失。
+Full CDN streams use CloudFront signed cookies. The application uses FFmpeg's domain- and path-scoped cookie options instead of a bare `Cookie` header that could be sent across redirects. Because of FFmpeg's command-line interface, cookie values briefly appear in the FFmpeg process arguments during a download and disappear when FFmpeg exits.
 
-开始下载时，程序会使用 `_mnet_atk` 生成 Bearer 授权，调用 Mnet Plus 官方媒体 Cookie 接口刷新 CloudFront 签名，再预检视频，并同时启动媒体下载与所选字幕抓取。
+When a download starts, the application uses `_mnet_atk` to create Bearer authorization, refreshes the CloudFront signed cookie through Mnet Plus's official media-cookie endpoint, preflights the video, and starts media and selected subtitle downloads concurrently.
 
-## 访问限制
+## Access Limitations
 
-程序只处理当前浏览器会话可正常访问的媒体，不绕过购买、地区、登录、HDCP 或 DRM 限制。若字幕 API 返回 `401/403`，程序会在日志中说明，并继续生成不含字幕的 MKV。
+The downloader handles media that the current browser session can access normally. It does not bypass purchase, regional, login, HDCP, or DRM restrictions. If the subtitle API returns `401` or `403`, the log explains the response and the application continues by creating an MKV without those subtitles.
 
-真实登录会话诊断默认跳过。如需仅验证 Edge 登录、媒体签名、HLS、音频和 `zh_CN` 字幕访问（不下载完整视频）：
+Live authenticated-session diagnostics are skipped by default. To verify Edge login, media signing, HLS, audio, and `zh_CN` subtitle access without downloading a complete video:
 
 ```bash
 MNETPLUS_LIVE_TEST=1 build/MnetPlusDownloaderLiveSessionTests -v1
 ```
+
+## Language Documentation
+
+- English (default): this file
+- [Simplified Chinese](README.zh-CN.md)
+
+## Downloads
+
+Release packages are published on the [bgi-dl GitHub Releases page](https://github.com/IamYei/bgi-dl/releases/latest):
+
+- `bgi-dl-Windows-x64.zip`
+- `bgi-dl-macOS-arm64.zip`
+- `bgi-dl-macOS-arm64.dmg`

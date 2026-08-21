@@ -22,5 +22,8 @@
 /*.log
 /aqtinstall.log
 
+# Optional local-only QtTest sources
+/tests/
+
 # Operating-system metadata
 .DS_Store

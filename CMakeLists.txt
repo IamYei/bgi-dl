@@ -58,7 +58,7 @@ install(TARGETS MnetPlusDownloader
 )
 
 include(CTest)
-if(BUILD_TESTING)
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/resolver_test.cpp")
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
     qt_add_executable(MnetPlusDownloaderResolverTests
         tests/resolver_test.cpp
