@@ -21,7 +21,7 @@ Mnet Plus Downloader 是一个 Qt 6 桌面下载器。输入 Mnet Plus 视频页
 Windows：
 
 - Visual Studio 2022（Desktop development with C++）或其他支持 C++17 的 Qt 6.5+ 工具链
-- Qt 6.5+（Widgets、Network、Concurrent、Sql、Test）
+- Qt 6.5+（Widgets、Network、Concurrent、Sql）
 - CMake 3.21+ 与 `ffmpeg`；把 `ffmpeg.exe` / `ffprobe.exe` 放入 `PATH`，或与下载器 `.exe` 放在同一目录
 
 macOS/Homebrew：
@@ -91,3 +91,11 @@ MNETPLUS_LIVE_TEST=1 build/MnetPlusDownloaderLiveSessionTests -v1
 - `bgi-dl-Windows-x64.zip`
 - `bgi-dl-macOS-arm64.zip`
 - `bgi-dl-macOS-arm64.dmg`
+
+## 许可证
+
+`bgi-dl` 使用 [MIT License](LICENSE) 发布。你可以复制、修改、二次发布本项目，
+也可以用于商业用途，但每份副本或软件的重要部分都必须保留版权声明和完整许可证文本，
+并标明作者 `IamYei (buguibgi)`。
+
+版权归 `IamYei (buguibgi)` 所有，年份为 2026。

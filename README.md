@@ -99,3 +99,12 @@ Release packages are published on the [bgi-dl GitHub Releases page](https://gith
 - `bgi-dl-Windows-x64.zip`
 - `bgi-dl-macOS-arm64.zip`
 - `bgi-dl-macOS-arm64.dmg`
+
+## License
+
+`bgi-dl` is released under the [MIT License](LICENSE). You may copy, modify,
+and redistribute the project, including commercially, provided that the
+copyright notice and the complete license text remain with every copy or
+substantial portion of the software.
+
+Copyright (c) 2026 IamYei (buguibgi).
