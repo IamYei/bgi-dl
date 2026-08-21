@@ -3,7 +3,9 @@
 
 - English (default): this file
 - [Simplified Chinese](README.zh-CN.md)
-
+⚠️ IMPORTANT! DO NOT PROMOTE OR SHARE THIS REPOSITORY ON ANY FORUMS, YOUTUBE, OR OTHER PUBLIC PLATFORMS!
+⚠️ 주의! 이 저장소를 어떤 포럼, 유튜브 또는 기타 공개적인 장소에서도 홍보하거나 공유하지 마세요!
+⚠️ 注意！不要在任何论坛，哔哩哔哩等公开场合宣传，分享此仓库！
 Mnet Plus Downloader is a Qt 6 desktop downloader for Mnet Plus. Paste an Mnet Plus video page URL and the application reads the page title, publicly available HLS video and audio streams, and subtitle configuration, then remuxes the result into an MKV file with FFmpeg.
 
 The interface supports four languages: English, Simplified Chinese, Japanese, and Korean. The first launch follows the system language when it is supported; later launches remember the language selected in the application.
