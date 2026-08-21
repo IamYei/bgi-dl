@@ -1,4 +1,8 @@
 # bgi-dl
+## Language Documentation
+
+- English (default): this file
+- [Simplified Chinese](README.zh-CN.md)
 
 Mnet Plus Downloader is a Qt 6 desktop downloader for Mnet Plus. Paste an Mnet Plus video page URL and the application reads the page title, publicly available HLS video and audio streams, and subtitle configuration, then remuxes the result into an MKV file with FFmpeg.
 
@@ -86,11 +90,6 @@ Live authenticated-session diagnostics are skipped by default. To verify Edge lo
 ```bash
 MNETPLUS_LIVE_TEST=1 build/MnetPlusDownloaderLiveSessionTests -v1
 ```
-
-## Language Documentation
-
-- English (default): this file
-- [Simplified Chinese](README.zh-CN.md)
 
 ## Downloads
 
