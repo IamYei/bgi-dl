@@ -247,11 +247,20 @@ void MainWindow::installBrowserHelper()
         manifestContent = QString::fromUtf8(manifestTemplate.readAll());
         manifestTemplate.close();
     } else {
+        // Fallback template when the bundled one is missing — substitute the
+        // host path directly, otherwise %2 stays unresolved and Chrome cannot
+        // find the host binary.
         manifestContent = QStringLiteral(
             "{\"name\":\"%1\",\"description\":\"bgi-dl Cookie Helper native messaging host\","
-            "\"path\":\"%2\",\"type\":\"stdio\",\"allowed_origins\":[],"
-            "\"allowed_extensions\":[]}");
+            "\"path\":\"%2\",\"type\":\"stdio\","
+            "\"allowed_origins\":[\"chrome-extension://%3/\"],"
+            "\"allowed_extensions\":[\"%3\"]}")
+            .arg(hostName, QDir::toNativeSeparators(hostPath),
+                 QStringLiteral("REPLACE_WITH_EXTENSION_ID"));
     }
+    // Note: the %2 path substitution must happen on the fallback string too,
+    // so apply the placeholder replacement to whichever template we ended up
+    // with.
     manifestContent.replace(QStringLiteral("REPLACE_WITH_HOST_PATH"),
                             QDir::toNativeSeparators(hostPath));
     manifestContent.replace(QStringLiteral("REPLACE_WITH_EXTENSION_ID"), extensionId);
@@ -267,14 +276,17 @@ void MainWindow::installBrowserHelper()
     }
 
 #if defined(Q_OS_WIN)
-    // Register for Chrome and Edge (HKCU — no admin required).
+    // Register for Chrome, Edge and Firefox (HKCU — no admin required).
     const QString chromeKey = QStringLiteral(
         "HKEY_CURRENT_USER\\Software\\Google\\Chrome\\NativeMessagingHosts\\%1").arg(hostName);
     const QString edgeKey = QStringLiteral(
         "HKEY_CURRENT_USER\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\%1").arg(hostName);
+    const QString firefoxKey = QStringLiteral(
+        "HKEY_CURRENT_USER\\Software\\Mozilla\\NativeMessagingHosts\\%1").arg(hostName);
     QSettings(chromeKey, QSettings::NativeFormat).setValue(QStringLiteral("."), manifestPath);
     QSettings(edgeKey, QSettings::NativeFormat).setValue(QStringLiteral("."), manifestPath);
-    appendLog(MNET_TEXT("浏览器助手已注册（Chrome/Edge 当前用户）：%1").arg(manifestPath));
+    QSettings(firefoxKey, QSettings::NativeFormat).setValue(QStringLiteral("."), manifestPath);
+    appendLog(MNET_TEXT("浏览器助手已注册（Chrome/Edge/Firefox 当前用户）：%1").arg(manifestPath));
 #else
     // Register for Chrome, Edge and Firefox on macOS.
     const QString support = QDir::home().filePath(QStringLiteral("Library/Application Support"));

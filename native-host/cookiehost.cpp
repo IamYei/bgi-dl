@@ -19,6 +19,8 @@
 #include <cstring>
 
 #if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
 #include <shlobj.h>
 #include <windows.h>
 #else
@@ -229,6 +231,17 @@ void decodeFieldValue(const char *value, size_t length, char *out, size_t outSiz
 
 int main()
 {
+#if defined(_WIN32)
+    // Chrome's native messaging protocol is binary framed: a 4-byte
+    // little-endian length prefix followed by raw bytes. Windows C stdio
+    // opens stdin/stdout in text mode by default, which mangles the stream
+    // (LF→CRLF translation on write, 0x1A treated as EOF on read). Any of
+    // those corruptions makes Chrome report "Error when communicating with
+    // the native messaging host" and kill the connection. Switch both pipes
+    // to binary mode before a single byte is read or written.
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     uint32_t payloadLength = 0;
     char *payload = readAllInput(&payloadLength);
     if (!payload) {
