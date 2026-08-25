@@ -12,7 +12,7 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName(QStringLiteral("Mnet Plus Downloader"));
     QApplication::setApplicationDisplayName(QStringLiteral("Mnet Plus Downloader"));
     QApplication::setOrganizationName(QStringLiteral("Local Tools"));
-    QApplication::setApplicationVersion(QStringLiteral("1.1.0"));
+    QApplication::setApplicationVersion(QStringLiteral("2.0.0"));
 
     QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
     font.setPointSize(13);
