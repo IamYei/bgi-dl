@@ -247,22 +247,28 @@ void MainWindow::installBrowserHelper()
         manifestContent = QString::fromUtf8(manifestTemplate.readAll());
         manifestTemplate.close();
     } else {
-        // Fallback template when the bundled one is missing — substitute the
-        // host path directly, otherwise %2 stays unresolved and Chrome cannot
-        // find the host binary.
+        // Fallback template when the bundled one is missing. The path is
+        // inserted later via the JSON-escaped REPLACE_WITH_HOST_PATH
+        // substitution (the placeholder avoids QString::arg's % escaping
+        // quirks and keeps a single code path for path insertion).
         manifestContent = QStringLiteral(
             "{\"name\":\"%1\",\"description\":\"bgi-dl Cookie Helper native messaging host\","
-            "\"path\":\"%2\",\"type\":\"stdio\","
-            "\"allowed_origins\":[\"chrome-extension://%3/\"],"
-            "\"allowed_extensions\":[\"%3\"]}")
-            .arg(hostName, QDir::toNativeSeparators(hostPath),
-                 QStringLiteral("REPLACE_WITH_EXTENSION_ID"));
+            "\"path\":\"REPLACE_WITH_HOST_PATH\",\"type\":\"stdio\","
+            "\"allowed_origins\":[\"chrome-extension://REPLACE_WITH_EXTENSION_ID/\"],"
+            "\"allowed_extensions\":[\"REPLACE_WITH_EXTENSION_ID\"]}")
+            .arg(hostName);
     }
-    // Note: the %2 path substitution must happen on the fallback string too,
-    // so apply the placeholder replacement to whichever template we ended up
-    // with.
-    manifestContent.replace(QStringLiteral("REPLACE_WITH_HOST_PATH"),
-                            QDir::toNativeSeparators(hostPath));
+    // JSON-escape the native host path before substitution. Windows paths
+    // contain backslashes ("C:\Users\..."), which are invalid JSON escape
+    // sequences ("C:\Users" -> "\U" = invalid \escape). Chrome rejects the
+    // whole manifest as malformed JSON and reports "Specified native
+    // messaging host not found" — this was the real root cause of the
+    // extension being unable to reach the local exe on Windows.
+    // Official example: "path": "C:\\Program Files\\My App\\host.exe"
+    // (from developer.chrome.com native-messaging docs).
+    QString hostPathJson = QDir::toNativeSeparators(hostPath);
+    hostPathJson.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+    manifestContent.replace(QStringLiteral("REPLACE_WITH_HOST_PATH"), hostPathJson);
     manifestContent.replace(QStringLiteral("REPLACE_WITH_EXTENSION_ID"), extensionId);
     QFile manifestFile(manifestPath);
     if (manifestFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
