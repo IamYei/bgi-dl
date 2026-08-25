@@ -35,7 +35,7 @@ constexpr auto kUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
 #endif
 constexpr int kMaxCaptionConcurrency = 12;
 constexpr int kMaxCaptionWindowsPerLanguage = 2200;
-constexpr auto kDefaultFilenameTemplate = "{date}.Mnet Plus.{title}.WEB-DL.{res}.{codec}.-{tag}.{ext}";
+constexpr auto kDefaultFilenameTemplate = "{date}.Mnet Plus.{title}.WEB-DL.{res}.{codec}.-{tag}";
 constexpr auto kDefaultReleaseTag = "buguibgib";
 
 QString yyMMddFromIsoDate(const QString &isoDate)
@@ -308,7 +308,14 @@ QString DownloadController::expandFilenameTemplate(const QString &templateString
     output.replace(QStringLiteral("{codec}"), codecLabel(codec));
     output.replace(QStringLiteral("{tag}"),
                    tag.isEmpty() ? QString::fromLatin1(kDefaultReleaseTag) : tag);
+    // {ext} expands to "mkv" for custom templates; the default template omits it
+    // because the ".mkv" suffix is appended when the output path is resolved.
     output.replace(QStringLiteral("{ext}"), QStringLiteral("mkv"));
+    // Strip a trailing extension the user may have added — the .mkv suffix is
+    // appended later, so keeping it here would produce "name.mkv.mkv".
+    if (output.endsWith(QStringLiteral(".mkv"), Qt::CaseInsensitive)) {
+        output.chop(4);
+    }
     return safeFileName(output);
 }
 

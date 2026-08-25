@@ -95,11 +95,16 @@ void MainWindow::syncCookiesTxtControls()
 {
     const bool usingCookiesTxt =
         m_browserCombo->currentData().toString() == QStringLiteral("cookies_txt");
-    m_cookiesTxtButton->setVisible(usingCookiesTxt);
-    if (usingCookiesTxt && m_cookiesTxtPath.isEmpty()) {
+    // Button stays visible at all times so the cookies.txt entry point is
+    // discoverable; it only *drives* the download when that source is selected.
+    m_cookiesTxtButton->setEnabled(!m_downloader.isActive());
+    if (m_cookiesTxtPath.isEmpty()) {
         m_cookiesTxtPath =
             QSettings().value(QStringLiteral("cookiesTxtPath")).toString();
         m_cookieLoader.setCookiesTxtPath(m_cookiesTxtPath);
+    }
+    if (usingCookiesTxt && m_cookiesTxtPath.isEmpty()) {
+        appendLog(MNET_TEXT("请先点击右侧文件夹按钮选择 cookies.txt 文件"));
     }
 }
 
@@ -174,7 +179,9 @@ void MainWindow::buildUi()
     m_cookiesTxtButton = new QToolButton;
     m_cookiesTxtButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogStart));
     m_cookiesTxtButton->setMinimumSize(46, 46);
-    m_cookiesTxtButton->setVisible(false);
+    m_cookiesTxtButton->setToolTip(
+        MNET_TEXT("选择 cookies.txt（Netscape 格式，需包含 mnetplus.world 域的 Cookie）"));
+    m_cookiesTxtButton->setAccessibleName(MNET_TEXT("选择 cookies.txt 文件"));
     urlRow->addWidget(m_cookiesTxtButton);
 
     m_resolveButton = new QPushButton;
@@ -279,7 +286,7 @@ void MainWindow::buildUi()
     m_filenameTemplateEdit = new QLineEdit;
     m_filenameTemplateEdit->setMinimumHeight(42);
     m_filenameTemplateEdit->setToolTip(
-        MNET_TEXT("可用占位符：{date} {title} {res} {resolution} {codec} {tag} {ext}"));
+        MNET_TEXT("可用占位符：{date} {title} {res} {resolution} {codec} {tag}（扩展名 .mkv 自动添加）"));
     m_filenameTemplateEdit->setAccessibleName(MNET_TEXT("文件名模板"));
     templateRow->addWidget(m_filenameTemplateEdit, 1);
     m_templateResetButton = new QToolButton;
@@ -362,7 +369,6 @@ void MainWindow::retranslateUi()
         m_cookiesTxtPath.isEmpty()
             ? MNET_TEXT("选择 cookies.txt（Netscape 格式，需包含 mnetplus.world 域的 Cookie）")
             : MNET_TEXT("cookies.txt：%1").arg(m_cookiesTxtPath));
-    m_cookiesTxtButton->setAccessibleName(MNET_TEXT("选择 cookies.txt 文件"));
     m_resolveButton->setText(MNET_TEXT("解析"));
     m_mediaInfoSection->setText(MNET_TEXT("媒体信息"));
     m_videoName->setText(MNET_TEXT("视频"));
@@ -378,7 +384,7 @@ void MainWindow::retranslateUi()
     m_outputButton->setToolTip(MNET_TEXT("选择输出目录"));
     m_outputButton->setAccessibleName(MNET_TEXT("选择输出目录"));
     m_filenameTemplateLabel->setText(MNET_TEXT("文件名模板"));
-    m_filenameTemplateEdit->setToolTip(MNET_TEXT("可用占位符：{date} {title} {res} {resolution} {codec} {tag} {ext}"));
+    m_filenameTemplateEdit->setToolTip(MNET_TEXT("可用占位符：{date} {title} {res} {resolution} {codec} {tag}（扩展名 .mkv 自动添加）"));
     m_templateResetButton->setToolTip(MNET_TEXT("恢复默认模板"));
     m_templateResetButton->setAccessibleName(MNET_TEXT("恢复默认模板"));
     m_downloadButton->setText(MNET_TEXT("下载并合并 MKV"));
