@@ -101,9 +101,13 @@ chrome.action.onClicked.addListener(async (tab) => {
 // after the first successful push we persist the extension id so the native
 // manifest's allowed_origins can be updated by reinstalling the helper.
 async function rememberExtensionId() {
-  const id = chrome.runtime.id;
-  if (id) {
-    await chrome.storage.local.set({ extensionId: id });
+  try {
+    const id = chrome.runtime.id;
+    if (id && chrome.storage && chrome.storage.local) {
+      await chrome.storage.local.set({ extensionId: id });
+    }
+  } catch (_) {
+    // storage is optional; never let it break the push flow
   }
 }
 
