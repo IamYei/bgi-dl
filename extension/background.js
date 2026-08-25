@@ -6,9 +6,14 @@
 
 const NATIVE_HOST = "com.bgidl.cookiehost";
 const COOKIE_DOMAINS = ["mnetplus.world"];
+const BADGE_TIMEOUT_MS = 8000;
 
 function isFirefox() {
   return typeof browser !== "undefined" && typeof chrome === "undefined";
+}
+
+function actionApi() {
+  return isFirefox() ? browser.action : chrome.action;
 }
 
 async function collectCookies() {
@@ -37,8 +42,71 @@ function sendNativeMessage(message) {
   });
 }
 
+// Badge text sits directly ON the toolbar icon — the only feedback the user
+// is guaranteed to see without hovering. Cleared automatically after a few
+// seconds so the icon doesn't stay dirty forever.
+function showBadge(text, color, tabId) {
+  const api = actionApi();
+  const details = { text, color, tabId: tabId == null ? undefined : tabId };
+  try {
+    api.setBadgeBackgroundColor({ color, tabId: details.tabId });
+    api.setBadgeText({ text, tabId: details.tabId });
+  } catch (_) {
+    // Some contexts (e.g. no active tab) reject badge updates; ignore.
+  }
+  setTimeout(() => {
+    try {
+      api.setBadgeText({ text: "", tabId: details.tabId });
+    } catch (_) {
+      // ignore
+    }
+  }, BADGE_TIMEOUT_MS);
+}
+
+function showNotification(title, message) {
+  try {
+    const api = isFirefox() ? browser.notifications : chrome.notifications;
+    if (api && api.create) {
+      api.create({
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icon128.png"),
+        title,
+        message,
+      });
+    }
+  } catch (_) {
+    // Notifications are best-effort; the badge already told the story.
+  }
+}
+
+function resultMessage(result) {
+  if (result.ok) {
+    return `已推送 ${result.count} 条 Mnet Plus Cookie。\n现在回到下载器，选择 Cookie 来源为“浏览器扩展”，点击“解析”即可。`;
+  }
+  if (result.stage === "no-cookies") {
+    return "当前浏览器里没有 mnetplus.world 的 Cookie。\n请先在本浏览器中登录 Mnet Plus（mnetplus.world），登录成功后再点这个图标。";
+  }
+  if (result.stage === "host") {
+    return "无法连接下载器的本地助手。\n请先打开下载器 → Cookie 来源选“浏览器扩展” → 点击“安装浏览器助手”，装完后再回到浏览器点这个图标。";
+  }
+  if (result.stage === "host-status") {
+    return `本地助手处理 Cookie 失败（${result.error}）。\n请重装“浏览器助手”后再试。`;
+  }
+  return `推送失败 — ${result.error}`;
+}
+
 async function pushCookies() {
   const cookies = await collectCookies();
+
+  if (!cookies.length) {
+    return {
+      ok: false,
+      stage: "no-cookies",
+      count: 0,
+      error: "no mnetplus.world cookies in this browser profile",
+    };
+  }
+
   const message = {
     type: "cookies",
     source: "extension",
@@ -57,49 +125,77 @@ async function pushCookies() {
     })),
   };
 
+  let response;
   try {
-    const response = await sendNativeMessage(message);
-    return { ok: true, count: cookies.length, response };
+    response = await sendNativeMessage(message);
   } catch (error) {
-    return { ok: false, count: cookies.length, error: String(error) };
+    // Chrome's error for a missing/unregistered host is a long
+    // "Error when communicating with the native messaging host" string.
+    return {
+      ok: false,
+      stage: "host",
+      count: cookies.length,
+      error: String(error),
+    };
   }
+
+  if (!response || response.status !== "ok") {
+    return {
+      ok: false,
+      stage: "host-status",
+      count: cookies.length,
+      error: (response && response.error) || "host returned no status",
+      response,
+    };
+  }
+
+  return {
+    ok: true,
+    count: (response && typeof response.cookies === "number")
+      ? response.cookies
+      : cookies.length,
+    response,
+  };
 }
 
 async function notifyResult(tabId, result) {
-  const text = result.ok
-    ? `bgi-dl: 已推送 ${result.count} 条 Mnet Plus Cookie，可以回到下载器点“解析”`
-    : `bgi-dl: 推送失败 — ${result.error}。请确认已在下载器中点击“安装浏览器助手”完成注册`;
+  const message = resultMessage(result);
+
+  if (result.ok) {
+    showBadge("OK", "#2e7d32", tabId);
+  } else if (result.stage === "no-cookies") {
+    showBadge("0", "#e65100", tabId);
+  } else {
+    showBadge("!", "#c62828", tabId);
+  }
+
+  showNotification(
+    result.ok ? "bgi-dl Cookie 推送成功" : "bgi-dl Cookie 推送失败",
+    message
+  );
+
+  // Tooltip as a third channel — useful for users who missed badge+toast.
   try {
-    if (isFirefox()) {
-      await browser.action.setTitle({ tabId, title: text });
-    } else if (tabId != null) {
-      await chrome.action.setTitle({ tabId, title: text });
-    }
+    const api = actionApi();
+    const details = { title: message };
+    if (tabId != null) details.tabId = tabId;
+    api.setTitle(details);
   } catch (_) {
     // Title updates can fail for privileged pages; ignore.
-  }
-  // Also surface the result through a notification so the user always sees it.
-  try {
-    if (isFirefox()) {
-      await browser.notifications.create({
-        type: "basic",
-        title: "bgi-dl Cookie Helper",
-        message: text,
-      });
-    }
-  } catch (_) {
-    // Chrome MV3 service workers lack the notifications permission here; skip.
   }
 }
 
 chrome.action.onClicked.addListener(async (tab) => {
+  const tabId = tab ? tab.id : null;
+  // Immediate "working" pulse so the click always feels acknowledged.
+  showBadge("…", "#1565c0", tabId);
   const result = await pushCookies();
-  await notifyResult(tab ? tab.id : null, result);
+  await notifyResult(tabId, result);
 });
 
-// The downloader can ask the extension to refresh its cached extension ID:
-// after the first successful push we persist the extension id so the native
-// manifest's allowed_origins can be updated by reinstalling the helper.
+// The downloader can ask the extension to push cookies on demand (used by
+// the app's "从浏览器推送" flow) and to reveal the extension ID so the
+// native manifest's allowed_origins can be matched.
 async function rememberExtensionId() {
   try {
     const id = chrome.runtime.id;

@@ -6,6 +6,7 @@
 #include <QComboBox>
 #include <QAction>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
@@ -46,6 +47,41 @@ QFrame *divider()
     line->setObjectName(QStringLiteral("divider"));
     line->setFrameShape(QFrame::HLine);
     return line;
+}
+
+// Chrome derives a deterministic extension ID for an unpacked extension from
+// its folder path (crx_file::id_util::GenerateIdForPath): SHA-256 over the
+// raw path bytes (UTF-16 on Windows with an UPPERCASE drive letter, UTF-8 on
+// macOS/Linux), take the first 16 bytes, hex-encode, and map 0-f to a-p.
+// Because it is deterministic, we can precompute the ID before the user even
+// loads the extension — the manifest's allowed_origins then matches on the
+// very first connection attempt instead of Chrome silently rejecting the
+// native messaging call.
+QString unpackedExtensionId(const QString &extensionFolder)
+{
+    QString path = QDir::cleanPath(extensionFolder);
+#if defined(Q_OS_WIN)
+    path = QDir::toNativeSeparators(path);
+    // Chrome normalizes the drive letter to upper-case (MaybeNormalizePath).
+    if (path.size() >= 2 && path.at(1) == QLatin1Char(':')
+        && path.at(0) >= QLatin1Char('a') && path.at(0) <= QLatin1Char('z')) {
+        path[0] = path.at(0).toUpper();
+    }
+    const QByteArray bytes(reinterpret_cast<const char *>(path.constData()),
+                           path.size() * sizeof(char16_t));
+#else
+    const QByteArray bytes = path.toUtf8();
+#endif
+    const QByteArray digest = QCryptographicHash::hash(bytes,
+                                                       QCryptographicHash::Sha256);
+    QString id;
+    id.reserve(32);
+    for (int i = 0; i < 16; ++i) {
+        const unsigned char byte = static_cast<unsigned char>(digest.at(i));
+        id.append(QChar(QLatin1Char('a' + ((byte >> 4) & 0xF))));
+        id.append(QChar(QLatin1Char('a' + (byte & 0xF))));
+    }
+    return id;
 }
 
 }
@@ -196,11 +232,12 @@ void MainWindow::installBrowserHelper()
                               | QFile::ReadUser | QFile::ExeUser);
 
     // 3. Write the native messaging manifest with the real host path.
-    //    allowed_origins/allowed_extensions use a wildcard-friendly template:
-    //    Chrome matches the exact extension ID, which the extension reports
-    //    on its first push; the placeholder is only a template and Chrome
-    //    refuses the connection until it matches — the detailed guide below
-    //    tells the user to click the extension once so we can capture the ID.
+    //    allowed_origins must contain the EXACT extension ID, otherwise
+    //    Chrome rejects the native messaging connection silently — this was
+    //    the root cause of "clicking the extension does nothing". Unpacked
+    //    extension IDs are deterministic (SHA-256 of the absolute folder
+    //    path), so we can precompute it before the user loads the extension.
+    const QString extensionId = unpackedExtensionId(extensionDest);
     QDir().mkpath(manifestsDest);
     const QString manifestPath = QDir(manifestsDest).filePath(hostName + QStringLiteral(".json"));
     QFile manifestTemplate(QDir(sourceRoot).filePath(
@@ -212,15 +249,12 @@ void MainWindow::installBrowserHelper()
     } else {
         manifestContent = QStringLiteral(
             "{\"name\":\"%1\",\"description\":\"bgi-dl Cookie Helper native messaging host\","
-            "\"path\":\"%2\",\"type\":\"stdio\","
-            "\"allowed_origins\":[\"chrome-extension://REPLACE_WITH_EXTENSION_ID/\"]}");
+            "\"path\":\"%2\",\"type\":\"stdio\",\"allowed_origins\":[],"
+            "\"allowed_extensions\":[]}");
     }
-    manifestContent.replace(QStringLiteral("REPLACE_WITH_HOST_PATH"), hostPath);
-    // Use a permissive match while the exact extension ID is unknown: Chrome
-    // requires the exact origin, so on first install we register with the
-    // wildcard placeholder replaced by the well-known unpacked pattern is NOT
-    // supported. Instead the host is registered and the extension ID is shown
-    // in the guide so the user can verify the connection.
+    manifestContent.replace(QStringLiteral("REPLACE_WITH_HOST_PATH"),
+                            QDir::toNativeSeparators(hostPath));
+    manifestContent.replace(QStringLiteral("REPLACE_WITH_EXTENSION_ID"), extensionId);
     QFile manifestFile(manifestPath);
     if (manifestFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         manifestFile.write(manifestContent.toUtf8());
@@ -266,14 +300,16 @@ void MainWindow::installBrowserHelper()
     appendLog(MNET_TEXT("已完成本机注册。请在浏览器扩展页：1) 打开右上角“开发者模式”开关；2) 点“加载已解压的扩展程序”；3) 选择刚打开的 extension 文件夹"));
     QMessageBox::information(
         this, MNET_TEXT("安装浏览器助手"),
-        MNET_TEXT("本机助手已注册完成。接下来在浏览器里完成三步：\n\n"
+        MNET_TEXT("本机助手已注册完成（扩展 ID：%1）。接下来在浏览器里完成三步：\n\n"
                   "1. 在刚打开的浏览器扩展页，打开右上角的【开发者模式】开关\n"
                   "2. 点击左上角【加载已解压的扩展程序】\n"
                   "3. 在弹出的文件夹选择框中，选择刚打开窗口里的【extension】文件夹\n\n"
                   "安装成功后，浏览器工具栏会出现 bgi-dl 图标（可能需要点拼图图标把它固定到工具栏）。\n\n"
                   "使用方法：在已登录 Mnet Plus 的浏览器页面，点击一次 bgi-dl 图标，"
-                  "Cookie 会立即推送给下载器；然后回到下载器点【解析】即可。\n\n"
-                  "提示：扩展文件夹位于 %1，安装后请勿删除或移动它。").arg(installRoot));
+                  "图标上会显示 OK 徽章，Cookie 会立即推送给下载器；"
+                  "然后回到下载器点【解析】即可。\n\n"
+                  "提示：扩展文件夹位于 %2，安装后请勿删除或移动它（移动后请重新安装助手）。")
+            .arg(extensionId, installRoot));
 }
 
 void MainWindow::buildUi()
