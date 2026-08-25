@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "bgi-dl Cookie Helper",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Exports mnetplus.world cookies to the Mnet Plus Downloader via native messaging.",
   "permissions": ["cookies", "nativeMessaging", "activeTab", "storage", "notifications"],
   "host_permissions": ["*://*.mnetplus.world/*"],
