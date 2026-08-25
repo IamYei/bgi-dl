@@ -15,7 +15,7 @@ int main(int argc, char *argv[])
     QApplication::setApplicationVersion(QStringLiteral("2.0.0"));
 
     QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-    font.setPointSize(13);
+    font.setPointSize(10);
     app.setFont(font);
 
     MainWindow window;

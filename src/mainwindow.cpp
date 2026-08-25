@@ -315,8 +315,8 @@ void MainWindow::installBrowserHelper()
 void MainWindow::buildUi()
 {
     setWindowTitle(QStringLiteral("Mnet Plus Downloader"));
-    resize(1160, 960);
-    setMinimumSize(920, 800);
+    resize(980, 720);
+    setMinimumSize(800, 560);
 
     auto *central = new QWidget;
     central->setObjectName(QStringLiteral("central"));

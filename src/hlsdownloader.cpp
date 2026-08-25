@@ -495,6 +495,27 @@ void HlsDownloader::finishIfReady()
         || !m_resourceReplies.isEmpty()) {
         return;
     }
+
+    // Sequentially concatenate CMAF/fMP4 chunks into a single media stream
+    const QString mergedFileName = m_audioMode ? QStringLiteral("stream.cmfa") : QStringLiteral("stream.mp4");
+    const QString mergedPath = QDir(m_outputDirectory).filePath(mergedFileName);
+    QFile mergedFile(mergedPath);
+    if (mergedFile.open(QIODevice::WriteOnly)) {
+        for (int i = 0; i < m_totalResources; ++i) {
+            const QString partPattern = QStringLiteral("part_%1.").arg(i, 6, 10, QLatin1Char('0'));
+            QDir dir(m_outputDirectory);
+            const QStringList matches = dir.entryList({partPattern + QStringLiteral("*")}, QDir::Files);
+            if (!matches.isEmpty()) {
+                QFile partFile(dir.filePath(matches.first()));
+                if (partFile.open(QIODevice::ReadOnly)) {
+                    mergedFile.write(partFile.readAll());
+                    partFile.close();
+                }
+            }
+        }
+        mergedFile.close();
+    }
+
     QSaveFile playlist(m_playlistPath);
     if (!playlist.open(QIODevice::WriteOnly | QIODevice::Text)) {
         fail(MNET_TEXT("无法写入本地 HLS 清单"));
@@ -506,7 +527,7 @@ void HlsDownloader::finishIfReady()
         return;
     }
     m_active = false;
-    emit completed(m_playlistPath, m_expectedHeight);
+    emit completed(mergedFile.exists() && mergedFile.size() > 0 ? mergedPath : m_playlistPath, m_expectedHeight);
 }
 
 void HlsDownloader::cancel()

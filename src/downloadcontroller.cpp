@@ -615,8 +615,6 @@ void DownloadController::remuxAudioWithFfmpeg(const QString &audioPlaylistPath)
     }
     QStringList arguments = {
         QStringLiteral("-hide_banner"), QStringLiteral("-nostdin"), QStringLiteral("-y"),
-        QStringLiteral("-protocol_whitelist"), QStringLiteral("file,crypto,data"),
-        QStringLiteral("-allowed_extensions"), QStringLiteral("ALL"),
         QStringLiteral("-i"), audioPlaylistPath,
         QStringLiteral("-map"), QStringLiteral("0:a:0"),
         QStringLiteral("-c:a"), QStringLiteral("copy"),
@@ -678,8 +676,6 @@ void DownloadController::startMediaAssembly()
     emit progressTextChanged(MNET_TEXT("并发下载完成，正在进行本地流复制"));
     QStringList arguments = {
         QStringLiteral("-hide_banner"), QStringLiteral("-nostdin"), QStringLiteral("-y"),
-        QStringLiteral("-protocol_whitelist"), QStringLiteral("file,crypto,data"),
-        QStringLiteral("-allowed_extensions"), QStringLiteral("ALL"),
         QStringLiteral("-i"), m_videoPlaylistPath,
     };
     if (!m_audioPath.isEmpty() && QFileInfo::exists(m_audioPath)) {
