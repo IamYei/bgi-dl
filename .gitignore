@@ -22,8 +22,9 @@
 /*.log
 /aqtinstall.log
 
-# Optional local-only QtTest sources
-/tests/
+# Optional local-only QtTest sources (hls_resume_test.cpp is tracked below)
+/tests/*
+!/tests/hls_resume_test.cpp
 
 # Operating-system metadata
 .DS_Store

@@ -8,6 +8,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QTimer>
 
 #include <algorithm>
 #include <utility>
@@ -24,6 +25,16 @@ constexpr auto kUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
 #endif
 constexpr int kMaxConcurrency = 6;
 constexpr int kMaxManifestDepth = 3;
+// Segments of 1080p/2160p h264 streams can be several MB each. The transfer
+// timeout must cover the full body, so small control requests (manifest /
+// resolution probes) get 30s while segment bodies get a generous ceiling.
+constexpr int kManifestTransferTimeoutMs = 30000;
+constexpr int kSegmentTransferTimeoutMs = 180000;
+// Per-segment retry budget. Slow links used to kill the whole download after
+// only 3 attempts of the first stalled segment (30s timeout x3 = ~96s of
+// log silence then "HTTP 0 Operation timed out").
+constexpr int kMaxSegmentRetries = 5;
+constexpr int kRetryBaseDelayMs = 1000;
 
 bool isAllowedMediaUrl(const QUrl &url)
 {
@@ -415,7 +426,7 @@ QString HlsDownloader::addResource(const QUrl &url, qint64 rangeStart, qint64 ra
                                   .arg(m_totalResources, 6, 10, QLatin1Char('0')).arg(suffix);
     const QString path = QDir(m_outputDirectory).filePath(localName);
     m_resourcePaths.insert(key, localName);
-    m_resourceQueue.enqueue(Resource{url, path, rangeStart, rangeLength, 0});
+    m_resourceQueue.enqueue(Resource{url, path, rangeStart, rangeLength, 0, 0, {}});
     ++m_totalResources;
     return localName;
 }
@@ -426,10 +437,39 @@ void HlsDownloader::pumpDownloads()
     while (m_resourceReplies.size() < kMaxConcurrency && !m_resourceQueue.isEmpty()) {
         const Resource resource = m_resourceQueue.dequeue();
         QNetworkRequest request = requestFor(resource.url);
+        // Segments get a generous transfer timeout; manifests/probes keep 30s.
+        request.setTransferTimeout(kSegmentTransferTimeoutMs);
+        qint64 rangeStart = resource.rangeStart;
+        qint64 rangeEnd = -1;
         if (resource.rangeLength > 0) {
+            rangeEnd = resource.rangeStart + resource.rangeLength - 1;
+        }
+        if (resource.receivedBytes > 0) {
+            // Resume a partially downloaded segment from where it stalled.
+            if (resource.rangeLength > 0) {
+                rangeStart = resource.rangeStart + resource.receivedBytes;
+                if (rangeStart > rangeEnd) {
+                    // Everything already received — write it out directly.
+                    QSaveFile done(resource.path);
+                    if (!done.open(QIODevice::WriteOnly)
+                        || done.write(resource.partialBuffer) != resource.partialBuffer.size()
+                        || !done.commit()) {
+                        fail(MNET_TEXT("视频分片写入失败：%1").arg(resource.path));
+                        return;
+                    }
+                    ++m_completedResources;
+                    emit progressChanged(m_completedResources, m_totalResources);
+                    continue;
+                }
+            } else {
+                rangeStart = resource.receivedBytes;
+            }
+        }
+        if (resource.rangeLength > 0 || resource.receivedBytes > 0) {
             request.setRawHeader("Range", QStringLiteral("bytes=%1-%2")
-                .arg(resource.rangeStart)
-                .arg(resource.rangeStart + resource.rangeLength - 1).toUtf8());
+                .arg(rangeStart)
+                .arg(rangeEnd >= 0 ? QString::number(rangeEnd) : QString())
+                .toUtf8());
         }
         QNetworkReply *reply = m_network.get(request);
         m_resourceReplies.insert(reply, resource);
@@ -439,47 +479,104 @@ void HlsDownloader::pumpDownloads()
     finishIfReady();
 }
 
+void HlsDownloader::scheduleRetry(const Resource &resource, const QString &reason)
+{
+    if (resource.retryCount >= kMaxSegmentRetries) {
+        fail(MNET_TEXT("视频分片下载失败（重试 %1 次后放弃）：%2")
+                 .arg(resource.retryCount).arg(reason));
+        return;
+    }
+    Resource retriable = resource;
+    ++retriable.retryCount;
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s — avoids hammering a CDN that
+    // is already struggling to serve the segment.
+    const int delayMs = kRetryBaseDelayMs << (retriable.retryCount - 1);
+    if (retriable.retryCount >= 2) {
+        emit logMessage(MNET_TEXT("分片重试第 %1 次（%2 秒后，已接收 %3 字节）：%4")
+                            .arg(retriable.retryCount)
+                            .arg(delayMs / 1000.0, 0, 'f', 1)
+                            .arg(retriable.receivedBytes)
+                            .arg(reason));
+    }
+    QTimer::singleShot(delayMs, this, [this, retriable] {
+        if (!m_active || m_cancelRequested) return;
+        m_resourceQueue.prepend(retriable);
+        pumpDownloads();
+    });
+}
+
 void HlsDownloader::handleResourceReply(QNetworkReply *reply)
 {
-    if (!m_resourceReplies.contains(reply)) {
+    if (reply && !m_resourceReplies.contains(reply)) {
         reply->deleteLater();
         return;
     }
-    Resource resource = m_resourceReplies.take(reply);
-    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    const auto networkError = reply->error();
-    const QString networkMessage = reply->errorString();
-    QByteArray payload = reply->readAll();
-    reply->deleteLater();
+    Resource resource = reply ? m_resourceReplies.take(reply) : Resource{};
+    const int status = reply
+        ? reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() : 206;
+    const auto networkError = reply ? reply->error() : QNetworkReply::NoError;
+    const QString networkMessage = reply ? reply->errorString() : QString();
+    const QByteArray payload = reply ? reply->readAll() : QByteArray{};
+    if (reply) reply->deleteLater();
 
     if (!m_active || m_cancelRequested) return;
+
+    // A network error mid-body (e.g. RemoteHostClosedError after a partial
+    // transfer) still leaves whatever bytes arrived in the reply buffer —
+    // salvage them so the retry can resume via Range instead of restarting
+    // the segment from byte 0.
     if (networkError != QNetworkReply::NoError || status < 200 || status >= 400) {
-        if (resource.retryCount < 2) {
-            ++resource.retryCount;
-            m_resourceQueue.prepend(resource);
-            pumpDownloads();
-            return;
+        if (!payload.isEmpty() && status >= 200 && status < 400) {
+            resource.partialBuffer.append(payload);
+            resource.receivedBytes += payload.size();
         }
-        fail(MNET_TEXT("视频分片下载失败（HTTP %1）：%2")
-                 .arg(status).arg(networkMessage));
+        scheduleRetry(resource,
+            MNET_TEXT("HTTP %1：%2").arg(status).arg(networkMessage));
         return;
     }
-    if (resource.rangeLength > 0) {
-        if (status == 200 && payload.size() >= resource.rangeStart + resource.rangeLength) {
-            payload = payload.mid(resource.rangeStart, resource.rangeLength);
-        }
-        if (payload.size() != resource.rangeLength) {
-            fail(MNET_TEXT("视频分片字节范围长度不匹配"));
-            return;
+
+    QByteArray body = payload;
+    qint64 offset = 0;
+    if (status == 206 && resource.receivedBytes > 0) {
+        // Server honored the resume Range; splice after what we already have.
+        offset = resource.receivedBytes;
+    } else if (status == 200 && resource.receivedBytes > 0) {
+        // Server ignored the resume Range and returned the object from the
+        // start — restart the concatenation from this fresh body.
+        resource.partialBuffer.clear();
+        resource.receivedBytes = 0;
+        offset = 0;
+    } else if (status == 200 && resource.rangeLength > 0 && resource.receivedBytes == 0) {
+        // Server ignored the Range header and returned the whole object —
+        // slice the requested window out of the full body (original behavior).
+        if (payload.size() >= resource.rangeStart + resource.rangeLength) {
+            body = payload.mid(resource.rangeStart, resource.rangeLength);
         }
     }
-    if (payload.isEmpty()) {
+
+    resource.receivedBytes = offset + body.size();
+
+    if (resource.rangeLength > 0 && resource.receivedBytes != resource.rangeLength) {
+        if (resource.receivedBytes < resource.rangeLength) {
+            // Truncated transfer (timeout fired mid-body) — resume later.
+            resource.partialBuffer.append(body);
+            scheduleRetry(resource, MNET_TEXT("传输不完整（%1/%2 字节）")
+                                        .arg(resource.receivedBytes)
+                                        .arg(resource.rangeLength));
+        } else {
+            fail(MNET_TEXT("视频分片字节范围长度不匹配"));
+        }
+        return;
+    }
+
+    QByteArray finalPayload = resource.partialBuffer + body;
+    if (finalPayload.isEmpty()) {
         fail(MNET_TEXT("视频分片内容为空"));
         return;
     }
 
     QSaveFile file(resource.path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(payload) != payload.size()
+    if (!file.open(QIODevice::WriteOnly) || file.write(finalPayload) != finalPayload.size()
         || !file.commit()) {
         fail(MNET_TEXT("视频分片写入失败：%1").arg(resource.path));
         return;
@@ -569,6 +666,6 @@ QNetworkRequest HlsDownloader::requestFor(const QUrl &url) const
     request.setRawHeader("User-Agent", kUserAgent);
     request.setRawHeader("Accept", "*/*");
     request.setRawHeader("Referer", m_referer.toUtf8());
-    request.setTransferTimeout(30000);
+    request.setTransferTimeout(kManifestTransferTimeoutMs);
     return request;
 }

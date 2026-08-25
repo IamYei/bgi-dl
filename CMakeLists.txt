@@ -102,6 +102,22 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/resolver_test.cpp
     )
     add_test(NAME downloadcontroller COMMAND MnetPlusDownloaderDownloadTests)
 
+    # Resume/retry integration test for the HLS segment downloader: stalls a
+    # segment mid-body, then verifies the retry resumes with a Range request
+    # and the merged stream is byte-identical to the original segment.
+    qt_add_executable(MnetPlusDownloaderHlsResumeTests
+        tests/hls_resume_test.cpp
+        src/localization.cpp
+        src/localization.h
+        src/hlsdownloader.cpp
+        src/hlsdownloader.h
+    )
+    target_link_libraries(MnetPlusDownloaderHlsResumeTests PRIVATE
+        Qt6::Network
+        Qt6::Test
+    )
+    add_test(NAME hlsresume COMMAND MnetPlusDownloaderHlsResumeTests)
+
     qt_add_executable(MnetPlusDownloaderLiveSessionTests
         tests/live_session_test.cpp
         src/localization.cpp

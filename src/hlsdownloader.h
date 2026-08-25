@@ -44,6 +44,13 @@ private:
         qint64 rangeStart = -1;
         qint64 rangeLength = -1;
         int retryCount = 0;
+        // Bytes already received for this resource across prior attempts.
+        // Used to resume with a Range header on retry instead of restarting
+        // the segment from byte 0 (which is what made slow links hit the
+        // transfer timeout over and over on the same first segment).
+        qint64 receivedBytes = 0;
+        // Spliced partial bodies accumulated before a successful finish.
+        QByteArray partialBuffer;
     };
 
     struct ManifestCandidate
@@ -62,6 +69,7 @@ private:
     QString addResource(const QUrl &url, qint64 rangeStart = -1,
                         qint64 rangeLength = -1);
     void pumpDownloads();
+    void scheduleRetry(const Resource &resource, const QString &reason);
     void handleResourceReply(QNetworkReply *reply);
     void finishIfReady();
     void fail(const QString &message);
