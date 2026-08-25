@@ -111,6 +111,20 @@ void HlsDownloader::setMaxHeight(int height)
 void HlsDownloader::start(const QUrl &manifestUrl, const QString &outputDirectory,
                           const QString &referer)
 {
+    m_audioMode = false;
+    startCommon(manifestUrl, outputDirectory, referer);
+}
+
+void HlsDownloader::startAudio(const QUrl &manifestUrl, const QString &outputDirectory,
+                               const QString &referer)
+{
+    m_audioMode = true;
+    startCommon(manifestUrl, outputDirectory, referer);
+}
+
+void HlsDownloader::startCommon(const QUrl &manifestUrl, const QString &outputDirectory,
+                                const QString &referer)
+{
     if (m_active) return;
     if (!manifestUrl.isValid() || !isAllowedMediaUrl(manifestUrl)) {
         emit failed(MNET_TEXT("HLS 清单地址无效或不受支持"));
@@ -211,9 +225,11 @@ void HlsDownloader::handleManifestReply()
         }
     }
 
-    if (audioStreamUrl.isValid()) emit audioStreamDiscovered(audioStreamUrl);
+    if (audioStreamUrl.isValid() && !m_audioMode) emit audioStreamDiscovered(audioStreamUrl);
 
-    if (!variants.isEmpty()) {
+    // Audio playlists are plain media playlists; skip master-variant handling
+    // and resolution probing entirely in audio mode.
+    if (!variants.isEmpty() && !m_audioMode) {
         std::sort(variants.begin(), variants.end(), [](const Variant &left, const Variant &right) {
             if (left.height != right.height) return left.height > right.height;
             return left.bandwidth > right.bandwidth;
@@ -259,7 +275,7 @@ void HlsDownloader::handleManifestReply()
     // When the page exposes a direct media playlist (not a master), still probe higher
     // resolutions by rewriting the `_<height>pw` marker in the URL (e.g. `_720pw_h264.m3u8`
     // -> `_2160pw_h264.m3u8`). This only runs once at the top level to avoid loops.
-    if (m_manifestDepth == 0 && m_manifestFallbacks.isEmpty() && m_expectedHeight > 0) {
+    if (!m_audioMode && m_manifestDepth == 0 && m_manifestFallbacks.isEmpty() && m_expectedHeight > 0) {
         const int preferredHeights[] = {2160, 1440, 1080};
         QList<ManifestCandidate> candidates;
         for (const int target : preferredHeights) {
@@ -285,9 +301,12 @@ void HlsDownloader::handleManifestReply()
         fail(error);
         return;
     }
-    emit mediaPlaylistSelected(responseUrl, m_expectedHeight);
-    emit logMessage(MNET_TEXT("视频清单确认：%1 个资源，%2 路并发下载")
-                        .arg(m_totalResources).arg(kMaxConcurrency));
+    if (!m_audioMode) emit mediaPlaylistSelected(responseUrl, m_expectedHeight);
+    emit logMessage(m_audioMode
+        ? MNET_TEXT("音频清单确认：%1 个资源，%2 路并发下载")
+              .arg(m_totalResources).arg(kMaxConcurrency)
+        : MNET_TEXT("视频清单确认：%1 个资源，%2 路并发下载")
+              .arg(m_totalResources).arg(kMaxConcurrency));
     pumpDownloads();
 }
 

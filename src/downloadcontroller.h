@@ -98,6 +98,7 @@ private:
     void startDirectMediaDownload();
     void startParallelHlsDownload();
     void startAudioDownload();
+    void remuxAudioWithFfmpeg(const QString &audioPlaylistPath);
     void handleAudioOutput();
     void handleAudioFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void maybeStartMediaAssembly();
@@ -141,6 +142,7 @@ private:
     QQueue<CaptionRequest> m_captionQueue;
     QHash<QString, CaptionJob> m_captionJobs;
     HlsDownloader m_hlsDownloader;
+    HlsDownloader m_audioDownloader;
     QProcess m_ffmpeg;
     QProcess m_audioProcess;
     MediaInfo m_media;
@@ -154,6 +156,7 @@ private:
     QString m_mediaPath;
     QString m_muxPath;
     QString m_videoPlaylistPath;
+    QString m_audioPlaylistPath;
     QString m_audioPath;
     QStringList m_exportedSrtPaths;
     QStringList m_captionLanguages;

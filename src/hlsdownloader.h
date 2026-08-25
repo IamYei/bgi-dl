@@ -19,6 +19,12 @@ public:
     void setMaxHeight(int height);
     void start(const QUrl &manifestUrl, const QString &outputDirectory,
                const QString &referer);
+    // Audio-only mode: no resolution probing/fallbacks, just fetch the media
+    // playlist and its segments. Used for parallel _audio.m3u8 downloads so
+    // audio uses the same robust segment fetcher as video (ffmpeg's HLS
+    // reader is fragile against CloudFront range requests and can truncate).
+    void startAudio(const QUrl &manifestUrl, const QString &outputDirectory,
+                    const QString &referer);
     void cancel();
     bool isActive() const;
 
@@ -48,6 +54,8 @@ private:
     };
 
     void fetchManifest(const QUrl &url, int depth, int hintedHeight);
+    void startCommon(const QUrl &manifestUrl, const QString &outputDirectory,
+                     const QString &referer);
     void handleManifestReply();
     bool parseMediaPlaylist(const QByteArray &payload, const QUrl &baseUrl,
                             QString *error);
@@ -75,6 +83,7 @@ private:
     int m_expectedHeight = 0;
     int m_totalResources = 0;
     int m_completedResources = 0;
+    bool m_audioMode = false;
     bool m_active = false;
     bool m_cancelRequested = false;
 };

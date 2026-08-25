@@ -207,6 +207,29 @@ DownloadController::DownloadController(QObject *parent)
             this, &DownloadController::handleAudioOutput);
     connect(&m_audioProcess, &QProcess::finished,
             this, &DownloadController::handleAudioFinished);
+    // Audio uses the same robust segment fetcher as video. ffmpeg's built-in
+    // HLS reader is fragile against CloudFront range requests and can
+    // truncate the stream (observed: 10 s audio arriving as 2 s), which
+    // later trips the duration-mismatch validation.
+    connect(&m_audioDownloader, &HlsDownloader::logMessage,
+            this, &DownloadController::logMessage);
+    connect(&m_audioDownloader, &HlsDownloader::completed, this,
+            [this](const QString &playlistPath, int) {
+        if (!m_active || m_cancelRequested) return;
+        m_audioPlaylistPath = playlistPath;
+        emit logMessage(MNET_TEXT("音频分片并发下载完成"));
+        remuxAudioWithFfmpeg(playlistPath);
+    });
+    connect(&m_audioDownloader, &HlsDownloader::failed, this,
+            [this](const QString &message) {
+        if (!m_active || m_cancelRequested) return;
+        // Fall back to the audio embedded in the video HLS stream; a failed
+        // separate audio fetch should not abort the whole download.
+        emit logMessage(MNET_TEXT("独立音频下载失败：%1；将使用视频流内嵌音轨").arg(message));
+        m_media.audioUrl.clear();
+        m_audioDownloadFinished = true;
+        maybeStartMediaAssembly();
+    });
     connect(&m_hlsDownloader, &HlsDownloader::logMessage,
             this, &DownloadController::logMessage);
     connect(&m_hlsDownloader, &HlsDownloader::progressChanged, this,
@@ -565,6 +588,7 @@ void DownloadController::startParallelHlsDownload()
     m_videoDownloadFinished = false;
     m_audioDownloadFinished = m_media.audioUrl.isEmpty();
     m_mediaAssemblyStarted = false;
+    m_audioPlaylistPath.clear();
     const QString videoDirectory = QDir(m_workDirectory).filePath(QStringLiteral("video"));
     m_hlsDownloader.setCookies(m_cookies);
     m_hlsDownloader.start(QUrl(m_media.videoUrl), videoDirectory, m_media.pageUrl);
@@ -573,6 +597,17 @@ void DownloadController::startParallelHlsDownload()
 
 void DownloadController::startAudioDownload()
 {
+    // Fetch the audio playlist segments with the same concurrent downloader
+    // the video path uses, then remux locally. Direct ffmpeg network input
+    // is no longer used for HLS audio (see constructor comment).
+    const QString audioDirectory = QDir(m_workDirectory).filePath(QStringLiteral("audio"));
+    m_audioDownloader.setCookies(m_cookies);
+    m_audioDownloader.startAudio(QUrl(m_media.audioUrl), audioDirectory, m_media.pageUrl);
+    emit logMessage(MNET_TEXT("独立音频已与视频分片同时开始下载"));
+}
+
+void DownloadController::remuxAudioWithFfmpeg(const QString &audioPlaylistPath)
+{
     const QString ffmpeg = findMediaTool(QStringLiteral("ffmpeg"));
     if (ffmpeg.isEmpty()) {
         finishWithError(MNET_TEXT("未找到 ffmpeg，无法下载独立音频"));
@@ -580,14 +615,14 @@ void DownloadController::startAudioDownload()
     }
     QStringList arguments = {
         QStringLiteral("-hide_banner"), QStringLiteral("-nostdin"), QStringLiteral("-y"),
-        QStringLiteral("-stats_period"), QStringLiteral("1"),
+        QStringLiteral("-protocol_whitelist"), QStringLiteral("file,crypto,data"),
+        QStringLiteral("-allowed_extensions"), QStringLiteral("ALL"),
+        QStringLiteral("-i"), audioPlaylistPath,
+        QStringLiteral("-map"), QStringLiteral("0:a:0"),
+        QStringLiteral("-c:a"), QStringLiteral("copy"),
+        m_audioPath,
     };
-    appendNetworkInputOptions(arguments, m_media.audioUrl,
-                              ffmpegCookieLines(m_cookies), m_media.pageUrl);
-    arguments << QStringLiteral("-i") << m_media.audioUrl
-              << QStringLiteral("-map") << QStringLiteral("0:a:0")
-              << QStringLiteral("-c:a") << QStringLiteral("copy")
-              << m_audioPath;
+    m_ffmpegPhase = FfmpegPhase::MediaDownload;
     m_audioTail.clear();
     m_audioProcess.start(ffmpeg, arguments);
     if (!m_audioProcess.waitForStarted(5000)) {
@@ -595,7 +630,6 @@ void DownloadController::startAudioDownload()
                             .arg(m_audioProcess.errorString()));
     } else {
         m_audioWatchdog.start();
-        emit logMessage(MNET_TEXT("独立音频已与视频分片同时开始下载"));
     }
 }
 
@@ -1344,6 +1378,7 @@ void DownloadController::cancel()
     if (!m_active) return;
     m_cancelRequested = true;
     m_hlsDownloader.cancel();
+    m_audioDownloader.cancel();
     if (m_audioProcess.state() != QProcess::NotRunning) {
         m_audioWatchdog.stop();
         m_audioProcess.blockSignals(true);
@@ -1397,6 +1432,7 @@ bool DownloadController::isActive() const
 void DownloadController::finishWithError(const QString &message)
 {
     m_hlsDownloader.cancel();
+    m_audioDownloader.cancel();
     if (m_audioProcess.state() != QProcess::NotRunning) {
         m_audioWatchdog.stop();
         m_audioProcess.blockSignals(true);
