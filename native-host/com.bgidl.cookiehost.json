@@ -1,0 +1,7 @@
+{
+  "name": "com.bgidl.cookiehost",
+  "description": "bgi-dl Cookie Helper native messaging host",
+  "path": "REPLACE_WITH_HOST_PATH",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://REPLACE_WITH_EXTENSION_ID/"]
+}

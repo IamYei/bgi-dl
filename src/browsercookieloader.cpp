@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkCookie>
@@ -678,6 +679,9 @@ CookieLoadResult BrowserCookieLoader::loadSync(const QString &requestedBrowser,
     if (requestedBrowser == QStringLiteral("cookies_txt") && !cookiesTxtPath.isEmpty()) {
         return loadCookiesTxtFile(cookiesTxtPath);
     }
+    if (requestedBrowser == QStringLiteral("extension")) {
+        return loadExtensionCache();
+    }
 
     const QStringList candidates = requestedBrowser == QStringLiteral("auto")
         ? automaticCandidates() : QStringList{requestedBrowser};
@@ -688,6 +692,8 @@ CookieLoadResult BrowserCookieLoader::loadSync(const QString &requestedBrowser,
         CookieLoadResult result;
         if (browser == QStringLiteral("firefox")) {
             result = loadFirefox();
+        } else if (browser == QStringLiteral("extension")) {
+            result = loadExtensionCache();
         } else {
             result = loadChromium(browser);
         }
@@ -801,9 +807,90 @@ CookieLoadResult BrowserCookieLoader::loadCookiesTxtFile(const QString &path)
     return result;
 }
 
+// --- bgi-dl browser extension cache -------------------------------------------
+
+QString BrowserCookieLoader::extensionCachePath()
+{
+#if defined(Q_OS_WIN)
+    const QString local = qEnvironmentVariable("LOCALAPPDATA");
+    if (!local.isEmpty()) return QDir(local).filePath(QStringLiteral("bgi-dl/cookies.json"));
+    return QDir::home().filePath(QStringLiteral("AppData/Local/bgi-dl/cookies.json"));
+#else
+    const QString cache = qEnvironmentVariable("XDG_CACHE_HOME");
+    if (!cache.isEmpty()) return QDir(cache).filePath(QStringLiteral("bgi-dl/cookies.json"));
+    return QDir::home().filePath(QStringLiteral(".cache/bgi-dl/cookies.json"));
+#endif
+}
+
+CookieLoadResult BrowserCookieLoader::loadExtensionCache()
+{
+    CookieLoadResult result;
+    result.browser = QStringLiteral("extension");
+    const QString path = extensionCachePath();
+    if (!QFileInfo::exists(path)) {
+        result.error = MNET_TEXT("未检测到浏览器扩展缓存（请安装 bgi-dl 浏览器助手并点击其图标推送 Cookie）");
+        return result;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        result.error = MNET_TEXT("无法读取浏览器扩展缓存：%1").arg(path);
+        return result;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        result.error = MNET_TEXT("浏览器扩展缓存格式无效");
+        return result;
+    }
+
+    const QJsonObject root = document.object();
+    const qint64 timestamp = static_cast<qint64>(root.value(QStringLiteral("timestamp")).toDouble());
+    // Cookie pushes older than an hour are stale; require a fresh click.
+    if (timestamp > 0
+        && QDateTime::currentSecsSinceEpoch() - timestamp > 3600) {
+        result.error = MNET_TEXT("浏览器扩展推送的 Cookie 已过期（超过 1 小时），请在浏览器中重新点击 bgi-dl 助手图标");
+        return result;
+    }
+
+    const QJsonArray cookies = root.value(QStringLiteral("cookies")).toArray();
+    for (const QJsonValue &value : cookies) {
+        const QJsonObject object = value.toObject();
+        const QString domain = object.value(QStringLiteral("domain")).toString().toLower();
+        if (!cookieHostMatches(domain)) continue;
+        const QByteArray name = object.value(QStringLiteral("name")).toString().toUtf8();
+        const QByteArray cookieValue = object.value(QStringLiteral("value")).toString().toUtf8();
+        if (name.isEmpty() || cookieValue.isEmpty()) continue;
+
+        QNetworkCookie cookie(name, cookieValue);
+        cookie.setDomain(domain);
+        const QString cookiePath = object.value(QStringLiteral("path")).toString();
+        cookie.setPath(cookiePath.isEmpty() ? QStringLiteral("/") : cookiePath);
+        cookie.setSecure(object.value(QStringLiteral("secure")).toBool());
+        cookie.setHttpOnly(object.value(QStringLiteral("httpOnly")).toBool());
+        const qint64 expiry = static_cast<qint64>(
+            object.value(QStringLiteral("expirationDate")).toDouble());
+        if (expiry > 0) {
+            const QDateTime expiration = QDateTime::fromSecsSinceEpoch(expiry, QTimeZone::UTC);
+            if (expiration <= QDateTime::currentDateTimeUtc()) continue;
+            cookie.setExpirationDate(expiration);
+        }
+        result.cookies.append(cookie);
+    }
+    if (result.cookies.isEmpty()) {
+        result.error = MNET_TEXT("浏览器扩展缓存中没有 Mnet Plus Cookie（请在已登录 Mnet Plus 的浏览器中点击 bgi-dl 助手图标）");
+    }
+    return result;
+}
+
 QStringList BrowserCookieLoader::automaticCandidates()
 {
     QStringList candidates;
+    // The extension cache is preferred: it works on every browser and every
+    // encryption regime, including Chrome 127+ app-bound encryption.
+    if (QFileInfo::exists(extensionCachePath())) {
+        candidates.append(QStringLiteral("extension"));
+    }
     for (const ChromiumSpec &spec : chromiumSpecs()) {
         if (QFileInfo::exists(spec.root)) candidates.append(spec.id);
     }

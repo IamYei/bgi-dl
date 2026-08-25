@@ -48,6 +48,7 @@ private:
     void retranslateUi();
     void chooseCookiesTxtFile();
     void syncCookiesTxtControls();
+    void installBrowserHelper();
     void setCookieStatus(const QString &source, const QStringList &arguments = {});
     QString browserDisplayName(const QString &browser) const;
     QString currentFilenameTemplate() const;
@@ -70,6 +71,7 @@ private:
     QPushButton *m_resolveButton = nullptr;
     QComboBox *m_browserCombo = nullptr;
     QToolButton *m_cookiesTxtButton = nullptr;
+    QToolButton *m_helperButton = nullptr;
     QComboBox *m_languageCombo = nullptr;
     QLabel *m_cookieStatus = nullptr;
     QLabel *m_languageLabel = nullptr;

@@ -5,7 +5,9 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QAction>
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
 #include <QFrame>
@@ -108,6 +110,132 @@ void MainWindow::syncCookiesTxtControls()
     }
 }
 
+void MainWindow::installBrowserHelper()
+{
+    // 1. Locate bundled helper payload (extension + native host) shipped next
+    //    to the executable or in the macOS bundle Resources.
+    const QString applicationDir = QCoreApplication::applicationDirPath();
+    QStringList helperRoots;
+#if defined(Q_OS_MACOS)
+    helperRoots << QDir(applicationDir).filePath(QStringLiteral("../Resources/browser-helper"));
+#endif
+    helperRoots << QDir(applicationDir).filePath(QStringLiteral("browser-helper"));
+    const QDir userHelper(QStandardPaths::writableLocation(
+        QStandardPaths::AppDataLocation) + QStringLiteral("/browser-helper"));
+
+    QString sourceRoot;
+    for (const QString &root : helperRoots) {
+        if (QFileInfo::exists(QDir(root).filePath(QStringLiteral("extension/manifest.json")))) {
+            sourceRoot = root;
+            break;
+        }
+    }
+    if (sourceRoot.isEmpty()) {
+        appendLog(MNET_TEXT("安装包内未找到浏览器助手文件（browser-helper 目录缺失）"));
+        QMessageBox::warning(this, MNET_TEXT("安装浏览器助手"),
+                             MNET_TEXT("安装包内未找到浏览器助手文件（browser-helper 目录缺失）"));
+        return;
+    }
+
+    // 2. Copy the extension + host to a stable per-user location so the
+    //    registry entry stays valid across app updates.
+    const QString hostName = QStringLiteral("com.bgidl.cookiehost");
+    QString extensionSource = QDir(sourceRoot).filePath(QStringLiteral("extension"));
+    QString hostSource = QDir(sourceRoot).filePath(QStringLiteral("host"));
+#if defined(Q_OS_WIN)
+    const QString hostExecutable = QStringLiteral("bgi-dl-cookiehost.exe");
+#else
+    const QString hostExecutable = QStringLiteral("bgi-dl-cookiehost");
+#endif
+
+    const QString extensionDest = userHelper.filePath(QStringLiteral("extension"));
+    const QString hostDest = userHelper.filePath(QStringLiteral("host"));
+    const QString manifestsDest = userHelper.filePath(QStringLiteral("manifests"));
+    auto copyDir = [](const QString &from, const QString &to) {
+        QDir().mkpath(to);
+        QDir sourceDir(from);
+        for (const QFileInfo &entry : sourceDir.entryInfoList(
+                 QDir::Files | QDir::NoDotAndDotDot)) {
+            QFile::remove(QDir(to).filePath(entry.fileName()));
+            if (!QFile::copy(entry.absoluteFilePath(),
+                             QDir(to).filePath(entry.fileName()))) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!copyDir(extensionSource, extensionDest) || !copyDir(hostSource, hostDest)) {
+        appendLog(MNET_TEXT("无法复制浏览器助手文件到用户目录"));
+        QMessageBox::warning(this, MNET_TEXT("安装浏览器助手"),
+                             MNET_TEXT("无法复制浏览器助手文件到用户目录"));
+        return;
+    }
+    const QString hostPath = QDir(hostDest).filePath(hostExecutable);
+    QFile::setPermissions(hostPath,
+                          QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+                              | QFile::ReadUser | QFile::ExeUser);
+
+    // 3. Write the native messaging manifest with the real host path, then
+    //    register it (HKCU on Windows, ~/Library/Application Support on macOS).
+    QDir().mkpath(manifestsDest);
+    const QString manifestPath = QDir(manifestsDest).filePath(hostName + QStringLiteral(".json"));
+    QFile manifestTemplate(QDir(sourceRoot).filePath(
+        QStringLiteral("manifests/") + hostName + QStringLiteral(".json")));
+    QString manifestContent;
+    if (manifestTemplate.open(QIODevice::ReadOnly)) {
+        manifestContent = QString::fromUtf8(manifestTemplate.readAll());
+        manifestTemplate.close();
+    } else {
+        manifestContent = QStringLiteral(
+            "{\"name\":\"%1\",\"description\":\"bgi-dl Cookie Helper native messaging host\","
+            "\"path\":\"%2\",\"type\":\"stdio\","
+            "\"allowed_origins\":[\"chrome-extension://REPLACE_WITH_EXTENSION_ID/\"]}");
+    }
+    manifestContent.replace(QStringLiteral("REPLACE_WITH_HOST_PATH"), hostPath);
+    QFile manifest(manifestPath);
+    if (manifest.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        manifest.write(manifestContent.toUtf8());
+        manifest.close();
+    }
+
+#if defined(Q_OS_WIN)
+    // Register for Chrome and Edge (HKCU — no admin required).
+    const QString chromeKey = QStringLiteral(
+        "HKEY_CURRENT_USER\\Software\\Google\\Chrome\\NativeMessagingHosts\\%1").arg(hostName);
+    const QString edgeKey = QStringLiteral(
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\%1").arg(hostName);
+    QSettings(chromeKey, QSettings::NativeFormat).setValue(QStringLiteral("."), manifestPath);
+    QSettings(edgeKey, QSettings::NativeFormat).setValue(QStringLiteral("."), manifestPath);
+    appendLog(MNET_TEXT("浏览器助手已注册（Chrome/Edge 当前用户）：%1").arg(manifestPath));
+#else
+    // Register for Chrome, Edge and Firefox on macOS.
+    const QString support = QDir::home().filePath(QStringLiteral("Library/Application Support"));
+    const QStringList browserDirs = {
+        QStringLiteral("Google/Chrome/NativeMessagingHosts"),
+        QStringLiteral("Microsoft/Edge/NativeMessagingHosts"),
+        QStringLiteral("Mozilla/NativeMessagingHosts"),
+    };
+    for (const QString &dir : browserDirs) {
+        const QString target = QDir(support).filePath(dir);
+        QDir().mkpath(target);
+        QFile::remove(QDir(target).filePath(hostName + QStringLiteral(".json")));
+        QFile::copy(manifestPath, QDir(target).filePath(hostName + QStringLiteral(".json")));
+    }
+    appendLog(MNET_TEXT("浏览器助手已注册（Chrome/Edge/Firefox）：%1").arg(manifestPath));
+#endif
+
+    // 4. Open the unpacked-extension load page and reveal the folder.
+    QDesktopServices::openUrl(QUrl(QStringLiteral("chrome://extensions/")));
+    QDesktopServices::openUrl(QUrl::fromLocalFile(extensionDest));
+    appendLog(MNET_TEXT("请在浏览器扩展页开启开发者模式，选择“加载已解压的扩展程序”，然后选择刚打开的文件夹"));
+    QMessageBox::information(
+        this, MNET_TEXT("安装浏览器助手"),
+        MNET_TEXT("已完成两步中的第一步：\n\n"
+                  "1. 本机助手已注册（已打开扩展文件夹）\n"
+                  "2. 请在浏览器扩展页开启开发者模式，点击“加载已解压的扩展程序”，选择刚打开的文件夹\n\n"
+                  "之后在已登录 Mnet Plus 的浏览器里点击 bgi-dl 图标，即可推送 Cookie。"));
+}
+
 void MainWindow::buildUi()
 {
     setWindowTitle(QStringLiteral("Mnet Plus Downloader"));
@@ -173,6 +301,7 @@ void MainWindow::buildUi()
     m_browserCombo->addItem(QStringLiteral("Chrome"), QStringLiteral("chrome"));
     m_browserCombo->addItem(QStringLiteral("Edge"), QStringLiteral("edge"));
     m_browserCombo->addItem(QStringLiteral("Firefox"), QStringLiteral("firefox"));
+    m_browserCombo->addItem(MNET_TEXT("浏览器扩展（推荐）"), QStringLiteral("extension"));
     m_browserCombo->addItem(MNET_TEXT("自定义 cookies.txt"), QStringLiteral("cookies_txt"));
     urlRow->addWidget(m_browserCombo);
 
@@ -183,6 +312,13 @@ void MainWindow::buildUi()
         MNET_TEXT("选择 cookies.txt（Netscape 格式，需包含 mnetplus.world 域的 Cookie）"));
     m_cookiesTxtButton->setAccessibleName(MNET_TEXT("选择 cookies.txt 文件"));
     urlRow->addWidget(m_cookiesTxtButton);
+
+    m_helperButton = new QToolButton;
+    m_helperButton->setIcon(style()->standardIcon(QStyle::SP_DialogHelpButton));
+    m_helperButton->setMinimumSize(46, 46);
+    m_helperButton->setToolTip(MNET_TEXT("安装浏览器助手（Chrome 127+ 推荐：点击浏览器里的 bgi-dl 图标即可推送 Cookie）"));
+    m_helperButton->setAccessibleName(MNET_TEXT("安装浏览器助手"));
+    urlRow->addWidget(m_helperButton);
 
     m_resolveButton = new QPushButton;
     m_resolveButton->setObjectName(QStringLiteral("secondaryButton"));
@@ -364,7 +500,8 @@ void MainWindow::retranslateUi()
     m_videoPageSection->setText(MNET_TEXT("视频页面"));
     m_urlEdit->setPlaceholderText(QStringLiteral("https://www.mnetplus.world/media/en/videos/..."));
     m_browserCombo->setItemText(0, MNET_TEXT("自动读取会话"));
-    m_browserCombo->setItemText(4, MNET_TEXT("自定义 cookies.txt"));
+    m_browserCombo->setItemText(4, MNET_TEXT("浏览器扩展（推荐）"));
+    m_browserCombo->setItemText(5, MNET_TEXT("自定义 cookies.txt"));
     m_cookiesTxtButton->setToolTip(
         m_cookiesTxtPath.isEmpty()
             ? MNET_TEXT("选择 cookies.txt（Netscape 格式，需包含 mnetplus.world 域的 Cookie）")
@@ -433,6 +570,7 @@ void MainWindow::connectSignals()
     connect(m_urlEdit, &QLineEdit::returnPressed, this, &MainWindow::beginResolve);
     connect(m_outputButton, &QToolButton::clicked, this, &MainWindow::chooseOutputDirectory);
     connect(m_cookiesTxtButton, &QToolButton::clicked, this, &MainWindow::chooseCookiesTxtFile);
+    connect(m_helperButton, &QToolButton::clicked, this, &MainWindow::installBrowserHelper);
     connect(m_browserCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &MainWindow::syncCookiesTxtControls);
     connect(m_downloadButton, &QPushButton::clicked, this, &MainWindow::startDownload);
@@ -1087,6 +1225,7 @@ QString MainWindow::browserDisplayName(const QString &browser) const
         {QStringLiteral("chrome"), QStringLiteral("Chrome")},
         {QStringLiteral("edge"), QStringLiteral("Edge")},
         {QStringLiteral("firefox"), QStringLiteral("Firefox")},
+        {QStringLiteral("extension"), MNET_TEXT("浏览器扩展")},
         {QStringLiteral("cookies_txt"), MNET_TEXT("cookies.txt")},
     };
     return names.value(browser, browser);

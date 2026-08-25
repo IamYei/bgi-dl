@@ -25,6 +25,9 @@ public:
     void cancel();
     void setCookiesTxtPath(const QString &path);
 
+    // Cache written by the bgi-dl browser extension native host.
+    static QString extensionCachePath();
+
     static QList<QNetworkCookie> parseCookiesTxt(const QByteArray &content);
 
 signals:
@@ -37,6 +40,7 @@ private:
     static CookieLoadResult loadChromium(const QString &browser);
     static CookieLoadResult loadFirefox();
     static CookieLoadResult loadCookiesTxtFile(const QString &path);
+    static CookieLoadResult loadExtensionCache();
     static QStringList automaticCandidates();
 
     QFutureWatcher<CookieLoadResult> m_watcher;
