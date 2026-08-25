@@ -23,6 +23,9 @@ public:
 
     void load(const QUrl &pageUrl, const QString &browser);
     void cancel();
+    void setCookiesTxtPath(const QString &path);
+
+    static QList<QNetworkCookie> parseCookiesTxt(const QByteArray &content);
 
 signals:
     void loadingBrowser(const QString &browser);
@@ -30,10 +33,13 @@ signals:
     void unavailable(const QString &reason);
 
 private:
-    static CookieLoadResult loadSync(const QString &requestedBrowser);
+    static CookieLoadResult loadSync(const QString &requestedBrowser, const QString &cookiesTxtPath);
     static CookieLoadResult loadChromium(const QString &browser);
+    static CookieLoadResult loadFirefox();
+    static CookieLoadResult loadCookiesTxtFile(const QString &path);
     static QStringList automaticCandidates();
 
     QFutureWatcher<CookieLoadResult> m_watcher;
     bool m_ignoreResult = false;
+    QString m_cookiesTxtPath;
 };

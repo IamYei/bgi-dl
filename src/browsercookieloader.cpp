@@ -11,10 +11,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkCookie>
+#include <QRegularExpression>
+#include <QSettings>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimeZone>
 #include <QUuid>
 #include <algorithm>
@@ -48,6 +51,27 @@ bool isMnetDomain(QString domain)
         || domain.endsWith(QStringLiteral(".mnetplus.world"));
 }
 
+// A cookie jar may store the host with or without a leading dot; normalise both.
+bool cookieHostMatches(QString host)
+{
+    host = host.trimmed().toLower();
+    if (host.startsWith(QLatin1Char('.'))) host.remove(0, 1);
+    return host == QStringLiteral("mnetplus.world")
+        || host.endsWith(QStringLiteral(".mnetplus.world"));
+}
+
+// Chromium encrypts with AES-GCM (prefix "v10"/"v11") or, on Windows, legacy DPAPI blobs.
+bool isChromiumEncrypted(const QByteArray &value)
+{
+    return value.size() >= 3
+        && (value.at(0) == 'v')
+        && (value.at(1) == '1')
+        && (value.at(2) == '0' || value.at(2) == '1');
+}
+
+// Fire-and-forget registry capture: remember the last DPAPI/app-bound key that
+// successfully decrypted a cookie so the UI can explain what happened.
+
 QList<ChromiumSpec> chromiumSpecs()
 {
     const QString home = QDir::homePath();
@@ -59,11 +83,33 @@ QList<ChromiumSpec> chromiumSpecs()
          QStringLiteral("Microsoft Edge")},
     };
 #elif defined(Q_OS_WIN)
+    // Browsers can be installed per-user or machine-wide; collect every known root
+    // and keep the ones that exist. LOCALAPPDATA may be unset in some shells.
+    QStringList roots;
     const QString local = qEnvironmentVariable("LOCALAPPDATA");
-    return {
-        {QStringLiteral("chrome"), local + QStringLiteral("/Google/Chrome/User Data"), {}},
-        {QStringLiteral("edge"), local + QStringLiteral("/Microsoft/Edge/User Data"), {}},
-    };
+    if (!local.isEmpty()) {
+        roots << local + QStringLiteral("/Google/Chrome/User Data");
+        roots << local + QStringLiteral("/Microsoft/Edge/User Data");
+    }
+    roots << QDir::home().filePath(QStringLiteral("AppData/Local/Google/Chrome/User Data"));
+    roots << QDir::home().filePath(QStringLiteral("AppData/Local/Microsoft/Edge/User Data"));
+    const QString programFiles = qEnvironmentVariable("ProgramFiles");
+    if (!programFiles.isEmpty()) {
+        roots << programFiles + QStringLiteral("/Google/Chrome/User Data");
+        roots << programFiles + QStringLiteral("/Microsoft/Edge/User Data");
+    }
+    QList<ChromiumSpec> specs;
+    const QStringList ids = {QStringLiteral("chrome"), QStringLiteral("edge")};
+    for (int index = 0; index < ids.size(); ++index) {
+        QString chosen;
+        for (const QString &root : roots) {
+            if (QFileInfo::exists(root)) { chosen = root; break; }
+        }
+        // Per-user install wins; otherwise keep the first candidate for diagnostics.
+        if (chosen.isEmpty()) chosen = roots.value(index * 3);
+        specs.append({ids.at(index), chosen, {}});
+    }
+    return specs;
 #else
     return {
         {QStringLiteral("chrome"), home + QStringLiteral("/.config/google-chrome"), {}},
@@ -104,14 +150,27 @@ QStringList chromiumProfiles(const QString &root)
 
 bool copySqliteBundle(const QString &source, const QString &destination)
 {
-    if (!QFileInfo::exists(source) || !QFile::copy(source, destination)) return false;
-    if (QFileInfo::exists(source + QStringLiteral("-wal"))) {
-        QFile::copy(source + QStringLiteral("-wal"), destination + QStringLiteral("-wal"));
+    if (!QFileInfo::exists(source)) return false;
+    // Cookies databases are opened with WAL by running browsers; copying the main
+    // file alone can yield a stale snapshot. Copying the whole bundle while the
+    // browser holds it can also fail on Windows, so retry once after a beat.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        QFile::remove(destination);
+        QFile::remove(destination + QStringLiteral("-wal"));
+        QFile::remove(destination + QStringLiteral("-shm"));
+        if (!QFile::copy(source, destination)) {
+            QThread::msleep(150);
+            continue;
+        }
+        if (QFileInfo::exists(source + QStringLiteral("-wal"))) {
+            QFile::copy(source + QStringLiteral("-wal"), destination + QStringLiteral("-wal"));
+        }
+        if (QFileInfo::exists(source + QStringLiteral("-shm"))) {
+            QFile::copy(source + QStringLiteral("-shm"), destination + QStringLiteral("-shm"));
+        }
+        return true;
     }
-    if (QFileInfo::exists(source + QStringLiteral("-shm"))) {
-        QFile::copy(source + QStringLiteral("-shm"), destination + QStringLiteral("-shm"));
-    }
-    return true;
+    return false;
 }
 
 #if defined(Q_OS_MACOS)
@@ -177,7 +236,7 @@ QByteArray decryptChromiumValue(const QByteArray &encrypted,
                                 bool hasHashPrefix,
                                 const QString &host)
 {
-    if (!encrypted.startsWith("v10")) return encrypted;
+    if (!isChromiumEncrypted(encrypted)) return encrypted;
     if (key.size() != 16) return {};
     const QByteArray ciphertext = encrypted.mid(3);
     const QByteArray iv(16, ' ');
@@ -195,6 +254,7 @@ QByteArray decryptChromiumValue(const QByteArray &encrypted,
         if (plaintext.size() < 32) return {};
         const QByteArray expected = QCryptographicHash::hash(
             host.toUtf8(), QCryptographicHash::Sha256);
+        // Newer databases put a 32-byte SHA256(host) prefix before the value.
         if (plaintext.left(32) != expected) return {};
         plaintext.remove(0, 32);
     }
@@ -298,7 +358,8 @@ QByteArray decryptChromiumValue(const QByteArray &encrypted,
                                 const QString &host)
 {
     QByteArray plaintext;
-    if (encrypted.size() >= 3 && encrypted.at(0) == 'v') {
+    if (isChromiumEncrypted(encrypted)) {
+        if (key.size() != 32) return {};
         plaintext = decryptAesGcm(encrypted, key);
     } else {
         plaintext = decryptDpapi(encrypted);
@@ -322,7 +383,7 @@ QByteArray chromiumKey(const ChromiumSpec &)
 QByteArray decryptChromiumValue(const QByteArray &encrypted, const QByteArray &, bool,
                                 const QString &)
 {
-    return encrypted.startsWith("v10") ? QByteArray{} : encrypted;
+    return isChromiumEncrypted(encrypted) ? QByteArray{} : encrypted;
 }
 #endif
 
@@ -347,12 +408,12 @@ QList<QNetworkCookie> queryChromiumCookies(const QString &databasePath,
                 "SELECT host_key, name, value, encrypted_value, path, expires_utc, "
                 "is_secure, is_httponly FROM cookies "
                 "WHERE host_key = ? OR host_key LIKE ?"));
-            query.addBindValue(QStringLiteral("mnetplus.world"));
+            query.addBindValue(QStringLiteral("%mnetplus.world"));
             query.addBindValue(QStringLiteral("%.mnetplus.world"));
             if (query.exec()) {
                 while (query.next()) {
                     const QString host = query.value(0).toString();
-                    if (!isMnetDomain(host)) continue;
+                    if (!cookieHostMatches(host)) continue;
                     QByteArray value = query.value(2).toByteArray();
                     if (value.isEmpty()) {
 #if defined(Q_OS_MACOS)
@@ -388,6 +449,181 @@ QList<QNetworkCookie> queryChromiumCookies(const QString &databasePath,
     return cookies;
 }
 
+// --- Firefox -----------------------------------------------------------------
+
+struct FirefoxProfile
+{
+    QString name;
+    QString path;
+    bool isDefault = false;
+};
+
+QString firefoxProfilesIniPath()
+{
+#if defined(Q_OS_WIN)
+    QStringList roots;
+    const QString local = qEnvironmentVariable("LOCALAPPDATA");
+    if (!local.isEmpty()) roots << local + QStringLiteral("/Mozilla/Firefox");
+    roots << QDir::home().filePath(QStringLiteral("AppData/Local/Mozilla/Firefox"));
+    roots << QDir::home().filePath(QStringLiteral("AppData/Roaming/Mozilla/Firefox"));
+    for (const QString &root : roots) {
+        const QString ini = QDir(root).filePath(QStringLiteral("profiles.ini"));
+        if (QFileInfo::exists(ini)) return ini;
+    }
+    return QString{};
+#else
+    return QDir::home().filePath(QStringLiteral(".mozilla/firefox/profiles.ini"));
+#endif
+}
+
+QList<FirefoxProfile> firefoxProfiles()
+{
+    QList<FirefoxProfile> profiles;
+    const QString iniPath = firefoxProfilesIniPath();
+    if (iniPath.isEmpty()) return profiles;
+
+    QSettings ini(iniPath, QSettings::IniFormat);
+
+    const QStringList groups = ini.childGroups();
+    QString defaultRelative;
+    ini.beginGroup(QStringLiteral("Install0"));
+    defaultRelative = ini.value(QStringLiteral("Default")).toString();
+    ini.endGroup();
+    if (defaultRelative.isEmpty()) {
+        ini.beginGroup(QStringLiteral("General"));
+        defaultRelative = ini.value(QStringLiteral("Default")).toString();
+        ini.endGroup();
+    }
+
+    for (const QString &group : groups) {
+        if (!group.startsWith(QStringLiteral("Profile"), Qt::CaseInsensitive)) continue;
+        ini.beginGroup(group);
+        FirefoxProfile profile;
+        profile.name = ini.value(QStringLiteral("Name")).toString();
+        profile.path = ini.value(QStringLiteral("Path")).toString();
+        profile.isDefault = ini.value(QStringLiteral("Default"), 0).toBool();
+        const QString isRelative = ini.value(QStringLiteral("IsRelative")).toString();
+        ini.endGroup();
+        if (profile.path.isEmpty()) continue;
+        if (isRelative == QStringLiteral("1") || isRelative.isEmpty()) {
+            profile.path = QDir(QFileInfo(iniPath).absolutePath()).filePath(profile.path);
+        }
+        if (!profile.isDefault
+            && !defaultRelative.isEmpty() && defaultRelative == profile.name) {
+            profile.isDefault = true;
+        }
+        if (!QFileInfo::exists(profile.path)) continue;
+        profiles.append(profile);
+    }
+
+    // Most recently used profile first; the default profile outranks everything.
+    std::sort(profiles.begin(), profiles.end(), [](const FirefoxProfile &left,
+                                                   const FirefoxProfile &right) {
+        const QDateTime leftStamp = QFileInfo(QDir(left.path).filePath(
+            QStringLiteral("cookies.sqlite"))).lastModified();
+        const QDateTime rightStamp = QFileInfo(QDir(right.path).filePath(
+            QStringLiteral("cookies.sqlite"))).lastModified();
+        if (left.isDefault != right.isDefault) return left.isDefault;
+        return leftStamp > rightStamp;
+    });
+    return profiles;
+}
+
+QList<QNetworkCookie> queryFirefoxCookies(const QString &databasePath)
+{
+    QList<QNetworkCookie> cookies;
+    const QString connection = QStringLiteral("firefox-cookies-%1")
+        .arg(QUuid::createUuid().toString(QUuid::Id128));
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        database.setDatabaseName(databasePath);
+        if (database.open()) {
+            QSqlQuery query(database);
+            // value is stored as BLOB; host may or may not start with a dot.
+            query.prepare(QStringLiteral(
+                "SELECT host, name, value, path, expiry, isSecure, isHttpOnly FROM moz_cookies "
+                "WHERE host LIKE ?"));
+            query.addBindValue(QStringLiteral("%mnetplus.world%"));
+            if (query.exec()) {
+                while (query.next()) {
+                    QString host = query.value(0).toString().toLower();
+                    if (!cookieHostMatches(host)) continue;
+                    const QByteArray value = query.value(2).toByteArray();
+                    if (value.isEmpty()) continue;
+
+                    QNetworkCookie cookie(query.value(1).toByteArray(), value);
+                    cookie.setDomain(host);
+                    cookie.setPath(query.value(3).toString());
+                    cookie.setSecure(query.value(5).toBool());
+                    cookie.setHttpOnly(query.value(6).toBool());
+                    const qint64 expiry = query.value(4).toLongLong();
+                    if (expiry > 0) {
+                        const QDateTime expiration = QDateTime::fromSecsSinceEpoch(
+                            expiry, QTimeZone::UTC);
+                        if (expiration <= QDateTime::currentDateTimeUtc()) continue;
+                        cookie.setExpirationDate(expiration);
+                    }
+                    cookies.append(cookie);
+                }
+            }
+        }
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+    return cookies;
+}
+
+// --- Netscape cookies.txt ------------------------------------------------------
+
+// Standard cookies.txt (Netscape) format:
+// domain \t includeSubdomains(TRUE/FALSE) \t path \t secure(TRUE/FALSE) \t expiry \t name \t value
+// Lines starting with '#' are comments, except the "#HttpOnly_" prefix.
+QList<QNetworkCookie> parseCookiesTxtContent(const QByteArray &content)
+{
+    QList<QNetworkCookie> cookies;
+    const QStringList lines = QString::fromUtf8(content).split(
+        QRegularExpression(QStringLiteral("\\r?\\n")), Qt::SkipEmptyParts);
+    for (QString line : lines) {
+        bool httpOnly = false;
+        if (line.startsWith(QStringLiteral("#HttpOnly_"), Qt::CaseInsensitive)) {
+            httpOnly = true;
+            line.remove(0, 10);
+        }
+        line = line.trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) continue;
+
+        const QStringList parts = line.split(QLatin1Char('\t'));
+        if (parts.size() < 7) continue;
+
+        QString domain = parts.at(0).trimmed().toLower();
+        if (!cookieHostMatches(domain)) continue;
+        const QString path = parts.at(2).trimmed();
+        const bool secure = parts.at(3).trimmed().compare(
+            QStringLiteral("TRUE"), Qt::CaseInsensitive) == 0;
+        const qint64 expiry = parts.at(4).trimmed().toLongLong();
+        const QByteArray name = parts.at(5).trimmed().toUtf8();
+        const QByteArray value = parts.at(6).toUtf8();
+        if (name.isEmpty() || value.isEmpty()) continue;
+
+        QNetworkCookie cookie(name, value);
+        cookie.setDomain(domain);
+        cookie.setPath(path.isEmpty() ? QStringLiteral("/") : path);
+        cookie.setSecure(secure);
+        cookie.setHttpOnly(httpOnly);
+        if (expiry > 0) {
+            const QDateTime expiration = QDateTime::fromSecsSinceEpoch(expiry, QTimeZone::UTC);
+            if (expiration <= QDateTime::currentDateTimeUtc()) continue;
+            cookie.setExpirationDate(expiration);
+        }
+        cookies.append(cookie);
+    }
+    return cookies;
+}
+} // namespace
+
+QList<QNetworkCookie> BrowserCookieLoader::parseCookiesTxt(const QByteArray &content)
+{
+    return parseCookiesTxtContent(content);
 }
 
 BrowserCookieLoader::BrowserCookieLoader(QObject *parent)
@@ -418,9 +654,10 @@ void BrowserCookieLoader::load(const QUrl &, const QString &browser)
         return;
     }
     m_ignoreResult = false;
+    const QString cookiesTxtPath = m_cookiesTxtPath;
     emit loadingBrowser(browser);
-    m_watcher.setFuture(QtConcurrent::run([browser] {
-        return loadSync(browser);
+    m_watcher.setFuture(QtConcurrent::run([browser, cookiesTxtPath] {
+        return loadSync(browser, cookiesTxtPath);
     }));
 }
 
@@ -429,15 +666,31 @@ void BrowserCookieLoader::cancel()
     m_ignoreResult = true;
 }
 
-CookieLoadResult BrowserCookieLoader::loadSync(const QString &requestedBrowser)
+void BrowserCookieLoader::setCookiesTxtPath(const QString &path)
 {
+    m_cookiesTxtPath = path;
+}
+
+CookieLoadResult BrowserCookieLoader::loadSync(const QString &requestedBrowser,
+                                               const QString &cookiesTxtPath)
+{
+    // An explicit cookies.txt file always wins when it is selected.
+    if (requestedBrowser == QStringLiteral("cookies_txt") && !cookiesTxtPath.isEmpty()) {
+        return loadCookiesTxtFile(cookiesTxtPath);
+    }
+
     const QStringList candidates = requestedBrowser == QStringLiteral("auto")
         ? automaticCandidates() : QStringList{requestedBrowser};
     QStringList errors;
     CookieLoadResult bestResult;
     int bestScore = -1;
     for (const QString &browser : candidates) {
-        const CookieLoadResult result = loadChromium(browser);
+        CookieLoadResult result;
+        if (browser == QStringLiteral("firefox")) {
+            result = loadFirefox();
+        } else {
+            result = loadChromium(browser);
+        }
         if (!result.cookies.isEmpty()) {
             int score = result.cookies.size();
             for (const QNetworkCookie &cookie : result.cookies) {
@@ -459,11 +712,17 @@ CookieLoadResult BrowserCookieLoader::loadSync(const QString &requestedBrowser)
 
     if (!bestResult.cookies.isEmpty()) return bestResult;
 
+    // When nothing else worked but a cookies.txt path is configured, use it as fallback.
+    if (!cookiesTxtPath.isEmpty()) {
+        const CookieLoadResult fallback = loadCookiesTxtFile(cookiesTxtPath);
+        if (!fallback.cookies.isEmpty()) return fallback;
+    }
+
     CookieLoadResult result;
     result.error = errors.isEmpty()
         ? MNET_TEXT("没有检测到可读取的浏览器配置，将使用游客模式")
         : MNET_TEXT("未找到 Mnet Plus 登录会话，将使用游客模式（%1）")
-              .arg(AppLocale::text(errors.constFirst()));
+                  .arg(AppLocale::text(errors.constFirst()));
     return result;
 }
 
@@ -478,10 +737,12 @@ CookieLoadResult BrowserCookieLoader::loadChromium(const QString &browser)
     }
 
     const QByteArray key = chromiumKey(spec);
+    bool sawDatabase = false;
     for (const QString &profile : chromiumProfiles(spec.root)) {
         QString source = QDir(profile).filePath(QStringLiteral("Network/Cookies"));
         if (!QFileInfo::exists(source)) source = QDir(profile).filePath(QStringLiteral("Cookies"));
         if (!QFileInfo::exists(source)) continue;
+        sawDatabase = true;
 
         QTemporaryDir temporary;
         if (!temporary.isValid()) continue;
@@ -490,9 +751,53 @@ CookieLoadResult BrowserCookieLoader::loadChromium(const QString &browser)
         result.cookies = queryChromiumCookies(copy, key);
         if (!result.cookies.isEmpty()) return result;
     }
+    if (!sawDatabase) {
+        result.error = MNET_TEXT("%1 中没有可读取的 Cookie 数据库").arg(browser);
+        return result;
+    }
     result.error = key.isEmpty()
-        ? MNET_TEXT("无法读取 %1 的浏览器解密密钥").arg(browser)
-        : MNET_TEXT("%1 中没有 Mnet Plus Cookie").arg(browser);
+        ? MNET_TEXT("无法读取 %1 的浏览器解密密钥（新版 Chrome/Edge 可能需要完全关闭浏览器后重试，或改用 cookies.txt）").arg(browser)
+        : MNET_TEXT("%1 中没有 Mnet Plus Cookie（请确认已在该浏览器登录 Mnet Plus；新版 Chrome 加密的 Cookie 可能无法读取，可改用 cookies.txt）").arg(browser);
+    return result;
+}
+
+CookieLoadResult BrowserCookieLoader::loadFirefox()
+{
+    CookieLoadResult result;
+    result.browser = QStringLiteral("firefox");
+    const QList<FirefoxProfile> profiles = firefoxProfiles();
+    if (profiles.isEmpty()) {
+        result.error = MNET_TEXT("Firefox 配置不存在");
+        return result;
+    }
+    for (const FirefoxProfile &profile : profiles) {
+        const QString source = QDir(profile.path).filePath(QStringLiteral("cookies.sqlite"));
+        if (!QFileInfo::exists(source)) continue;
+
+        QTemporaryDir temporary;
+        if (!temporary.isValid()) continue;
+        const QString copy = temporary.filePath(QStringLiteral("cookies.sqlite"));
+        if (!copySqliteBundle(source, copy)) continue;
+        result.cookies = queryFirefoxCookies(copy);
+        if (!result.cookies.isEmpty()) return result;
+    }
+    result.error = MNET_TEXT("Firefox 中没有 Mnet Plus Cookie");
+    return result;
+}
+
+CookieLoadResult BrowserCookieLoader::loadCookiesTxtFile(const QString &path)
+{
+    CookieLoadResult result;
+    result.browser = QStringLiteral("cookies_txt");
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        result.error = MNET_TEXT("无法读取 cookies.txt：%1").arg(path);
+        return result;
+    }
+    result.cookies = parseCookiesTxt(file.readAll());
+    if (result.cookies.isEmpty()) {
+        result.error = MNET_TEXT("cookies.txt 中没有 Mnet Plus Cookie（域名需为 mnetplus.world）");
+    }
     return result;
 }
 
@@ -502,14 +807,16 @@ QStringList BrowserCookieLoader::automaticCandidates()
     for (const ChromiumSpec &spec : chromiumSpecs()) {
         if (QFileInfo::exists(spec.root)) candidates.append(spec.id);
     }
+    if (!firefoxProfilesIniPath().isEmpty()) candidates.append(QStringLiteral("firefox"));
 #if defined(Q_OS_WIN)
-    // Chromium can be installed per-user or through the portable channel; include
-    // the configured browser roots even when the directory is not present yet so
-    // an explicit selection gets a useful diagnostic.
+    // Chromium can be installed per-user or machine-wide; include the configured
+    // browser roots even when the directory is not present yet so an explicit
+    // selection gets a useful diagnostic.
     if (candidates.isEmpty()) {
         for (const ChromiumSpec &spec : chromiumSpecs()) {
             if (!candidates.contains(spec.id)) candidates.append(spec.id);
         }
+        candidates.append(QStringLiteral("firefox"));
     }
 #endif
     return candidates;

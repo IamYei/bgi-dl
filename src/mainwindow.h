@@ -46,6 +46,8 @@ private:
     void resetMediaDisplay();
     void changeLanguage(int index);
     void retranslateUi();
+    void chooseCookiesTxtFile();
+    void syncCookiesTxtControls();
     void setCookieStatus(const QString &source, const QStringList &arguments = {});
     QString browserDisplayName(const QString &browser) const;
     QString currentFilenameTemplate() const;
@@ -60,12 +62,14 @@ private:
     QUrl m_pendingUrl;
     bool m_hasMedia = false;
     bool m_resolving = false;
+    QString m_cookiesTxtPath;
     QString m_cookieStatusSource;
     QStringList m_cookieStatusArguments;
 
     QLineEdit *m_urlEdit = nullptr;
     QPushButton *m_resolveButton = nullptr;
     QComboBox *m_browserCombo = nullptr;
+    QToolButton *m_cookiesTxtButton = nullptr;
     QComboBox *m_languageCombo = nullptr;
     QLabel *m_cookieStatus = nullptr;
     QLabel *m_languageLabel = nullptr;

@@ -209,6 +209,20 @@ constexpr std::array kTranslations = {
     TranslationEntry{"视频分片字节范围长度不匹配", "Video segment byte range length does not match", "動画セグメントのバイト範囲の長さが一致しません", "동영상 세그먼트 바이트 범위 길이가 일치하지 않습니다"},
     TranslationEntry{"输出文件：%1", "Output file: %1", "出力ファイル: %1", "출력 파일: %1"},
     TranslationEntry{"没有可下载的视频流", "No downloadable video stream", "ダウンロード可能な動画ストリームがありません", "다운로드할 동영상 스트림이 없습니다"},
+    TranslationEntry{"自定义 cookies.txt", "Custom cookies.txt", "カスタム cookies.txt", "사용자 지정 cookies.txt"},
+    TranslationEntry{"选择 cookies.txt（Netscape 格式，需包含 mnetplus.world 域的 Cookie）", "Choose a cookies.txt (Netscape format; must contain mnetplus.world cookies)", "cookies.txt を選択（Netscape 形式。mnetplus.world ドメインの Cookie が必要です）", "cookies.txt 선택(Netscape 형식, mnetplus.world 도메인 쿠키 필요)"},
+    TranslationEntry{"cookies.txt：%1", "cookies.txt: %1", "cookies.txt: %1", "cookies.txt: %1"},
+    TranslationEntry{"选择 cookies.txt 文件", "Choose cookies.txt file", "cookies.txt ファイルを選択", "cookies.txt 파일 선택"},
+    TranslationEntry{"cookies.txt 已选择：%1", "cookies.txt selected: %1", "cookies.txt を選択しました: %1", "cookies.txt 선택됨: %1"},
+    TranslationEntry{"所有文件 (*.*)", "All files (*.*)", "すべてのファイル (*.*)", "모든 파일 (*.*)"},
+    TranslationEntry{"cookies.txt", "cookies.txt", "cookies.txt", "cookies.txt"},
+    TranslationEntry{"Firefox 配置不存在", "Firefox profile does not exist", "Firefox のプロファイルが存在しません", "Firefox 프로필이 없습니다"},
+    TranslationEntry{"Firefox 中没有 Mnet Plus Cookie", "No Mnet Plus cookies found in Firefox", "Firefox に Mnet Plus の Cookie がありません", "Firefox에 Mnet Plus 쿠키가 없습니다"},
+    TranslationEntry{"%1 中没有可读取的 Cookie 数据库", "No readable cookie database found in %1", "%1 に読み取り可能な Cookie データベースがありません", "%1에서 읽을 수 있는 쿠키 데이터베이스를 찾지 못했습니다"},
+    TranslationEntry{"无法读取 %1 的浏览器解密密钥（新版 Chrome/Edge 可能需要完全关闭浏览器后重试，或改用 cookies.txt）", "Could not read the browser decryption key for %1 (newer Chrome/Edge may need the browser fully closed, or use cookies.txt)", "%1 のブラウザー復号鍵を読み取れませんでした（新しい Chrome/Edge ではブラウザーを完全に終了して再試行するか、cookies.txt を使用してください）", "%1의 브라우저 복호화 키를 읽을 수 없습니다(최신 Chrome/Edge는 브라우저를 완전히 닫고 재시도하거나 cookies.txt를 사용하세요)"},
+    TranslationEntry{"%1 中没有 Mnet Plus Cookie（请确认已在该浏览器登录 Mnet Plus；新版 Chrome 加密的 Cookie 可能无法读取，可改用 cookies.txt）", "No Mnet Plus cookies found in %1 (make sure the browser is signed in to Mnet Plus; cookies encrypted by newer Chrome may be unreadable — use cookies.txt instead)", "%1 に Mnet Plus の Cookie がありません（そのブラウザーで Mnet Plus にログインしているか確認してください。新しい Chrome で暗号化された Cookie は読み取れない場合があります。cookies.txt を使用してください）", "%1에 Mnet Plus 쿠키가 없습니다(해당 브라우저에서 Mnet Plus에 로그인했는지 확인하세요. 최신 Chrome에서 암호화된 쿠키는 읽을 수 없을 수 있으니 cookies.txt를 사용하세요)"},
+    TranslationEntry{"无法读取 cookies.txt：%1", "Could not read cookies.txt: %1", "cookies.txt を読み取れません: %1", "cookies.txt를 읽을 수 없습니다: %1"},
+    TranslationEntry{"cookies.txt 中没有 Mnet Plus Cookie（域名需为 mnetplus.world）", "No Mnet Plus cookies in cookies.txt (the domain must be mnetplus.world)", "cookies.txt に Mnet Plus の Cookie がありません（ドメインは mnetplus.world である必要があります）", "cookies.txt에 Mnet Plus 쿠키가 없습니다(도메인이 mnetplus.world여야 합니다)"},
 };
 
 std::atomic<AppLocale::Language> s_language{AppLocale::Language::Chinese};

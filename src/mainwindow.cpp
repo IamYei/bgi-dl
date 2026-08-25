@@ -60,6 +60,7 @@ MainWindow::MainWindow(QWidget *parent)
     buildUi();
     applyTheme();
     connectSignals();
+    syncCookiesTxtControls();
     resetMediaDisplay();
 
     QString defaultPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
@@ -67,7 +68,39 @@ MainWindow::MainWindow(QWidget *parent)
     m_outputEdit->setText(settings.value(QStringLiteral("outputDirectory"), defaultPath).toString());
     m_filenameTemplateEdit->setText(settings.value(
         QStringLiteral("filenameTemplate"), DownloadController::defaultFilenameTemplate()).toString());
+    m_cookiesTxtPath = settings.value(QStringLiteral("cookiesTxtPath")).toString();
+    if (!m_cookiesTxtPath.isEmpty() && QFileInfo::exists(m_cookiesTxtPath)) {
+        m_cookieLoader.setCookiesTxtPath(m_cookiesTxtPath);
+    } else {
+        m_cookiesTxtPath.clear();
+    }
     appendLog(MNET_TEXT("就绪"));
+}
+
+void MainWindow::chooseCookiesTxtFile()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, MNET_TEXT("选择 cookies.txt"),
+        m_cookiesTxtPath.isEmpty() ? QDir::homePath() : QFileInfo(m_cookiesTxtPath).absolutePath(),
+        QStringLiteral("cookies.txt (*.txt);;%1").arg(MNET_TEXT("所有文件 (*.*)")));
+    if (path.isEmpty()) return;
+    m_cookiesTxtPath = path;
+    QSettings().setValue(QStringLiteral("cookiesTxtPath"), path);
+    m_cookieLoader.setCookiesTxtPath(path);
+    retranslateUi();
+    appendLog(MNET_TEXT("cookies.txt 已选择：%1").arg(path));
+}
+
+void MainWindow::syncCookiesTxtControls()
+{
+    const bool usingCookiesTxt =
+        m_browserCombo->currentData().toString() == QStringLiteral("cookies_txt");
+    m_cookiesTxtButton->setVisible(usingCookiesTxt);
+    if (usingCookiesTxt && m_cookiesTxtPath.isEmpty()) {
+        m_cookiesTxtPath =
+            QSettings().value(QStringLiteral("cookiesTxtPath")).toString();
+        m_cookieLoader.setCookiesTxtPath(m_cookiesTxtPath);
+    }
 }
 
 void MainWindow::buildUi()
@@ -134,7 +167,15 @@ void MainWindow::buildUi()
     m_browserCombo->addItem(MNET_TEXT("自动读取会话"), QStringLiteral("auto"));
     m_browserCombo->addItem(QStringLiteral("Chrome"), QStringLiteral("chrome"));
     m_browserCombo->addItem(QStringLiteral("Edge"), QStringLiteral("edge"));
+    m_browserCombo->addItem(QStringLiteral("Firefox"), QStringLiteral("firefox"));
+    m_browserCombo->addItem(MNET_TEXT("自定义 cookies.txt"), QStringLiteral("cookies_txt"));
     urlRow->addWidget(m_browserCombo);
+
+    m_cookiesTxtButton = new QToolButton;
+    m_cookiesTxtButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogStart));
+    m_cookiesTxtButton->setMinimumSize(46, 46);
+    m_cookiesTxtButton->setVisible(false);
+    urlRow->addWidget(m_cookiesTxtButton);
 
     m_resolveButton = new QPushButton;
     m_resolveButton->setObjectName(QStringLiteral("secondaryButton"));
@@ -316,6 +357,12 @@ void MainWindow::retranslateUi()
     m_videoPageSection->setText(MNET_TEXT("视频页面"));
     m_urlEdit->setPlaceholderText(QStringLiteral("https://www.mnetplus.world/media/en/videos/..."));
     m_browserCombo->setItemText(0, MNET_TEXT("自动读取会话"));
+    m_browserCombo->setItemText(4, MNET_TEXT("自定义 cookies.txt"));
+    m_cookiesTxtButton->setToolTip(
+        m_cookiesTxtPath.isEmpty()
+            ? MNET_TEXT("选择 cookies.txt（Netscape 格式，需包含 mnetplus.world 域的 Cookie）")
+            : MNET_TEXT("cookies.txt：%1").arg(m_cookiesTxtPath));
+    m_cookiesTxtButton->setAccessibleName(MNET_TEXT("选择 cookies.txt 文件"));
     m_resolveButton->setText(MNET_TEXT("解析"));
     m_mediaInfoSection->setText(MNET_TEXT("媒体信息"));
     m_videoName->setText(MNET_TEXT("视频"));
@@ -379,6 +426,9 @@ void MainWindow::connectSignals()
     connect(m_resolveButton, &QPushButton::clicked, this, &MainWindow::beginResolve);
     connect(m_urlEdit, &QLineEdit::returnPressed, this, &MainWindow::beginResolve);
     connect(m_outputButton, &QToolButton::clicked, this, &MainWindow::chooseOutputDirectory);
+    connect(m_cookiesTxtButton, &QToolButton::clicked, this, &MainWindow::chooseCookiesTxtFile);
+    connect(m_browserCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &MainWindow::syncCookiesTxtControls);
     connect(m_downloadButton, &QPushButton::clicked, this, &MainWindow::startDownload);
     connect(m_batchButton, &QPushButton::clicked, this, &MainWindow::startBatchDownload);
     connect(m_outputEdit, &QLineEdit::editingFinished, this, [this] {
@@ -1030,6 +1080,8 @@ QString MainWindow::browserDisplayName(const QString &browser) const
         {QStringLiteral("auto"), MNET_TEXT("浏览器")},
         {QStringLiteral("chrome"), QStringLiteral("Chrome")},
         {QStringLiteral("edge"), QStringLiteral("Edge")},
+        {QStringLiteral("firefox"), QStringLiteral("Firefox")},
+        {QStringLiteral("cookies_txt"), MNET_TEXT("cookies.txt")},
     };
     return names.value(browser, browser);
 }
